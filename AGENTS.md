@@ -1,6 +1,6 @@
 # Agy Team — Multi-Agent Engineering Rules & Protocol
 
-This project is developed by an 8-agent persistent AI engineering team managed by **Agy Team**.
+This project is developed by a 8-agent persistent AI engineering team managed by **Agy Team**.
 Every agent operating in this repository must strictly adhere to these rules.
 
 ---
@@ -9,14 +9,14 @@ Every agent operating in this repository must strictly adhere to these rules.
 
 | Pane | Agent Name | Role | Working Tree | Git Branch | Access Mode |
 |---|---|---|---|---|---|
-| **T1** | `main` | Orchestrator & Integrator | `.` (Repo Root) | `main` | Read/Write (Integration & Coordination) |
-| **T2** | `backend` | Backend Engineer | `.worktrees/backend` | `agent/backend` | Read/Write (Backend APIs & Logic) |
-| **T3** | `frontend` | Frontend Engineer | `.worktrees/frontend` | `agent/frontend` | Read/Write (UI/UX & Components) |
-| **T4** | `database` | Database Engineer | `.worktrees/database` | `agent/database` | Read/Write (Schemas & Migrations) |
-| **T5** | `devops` | DevOps & Infrastructure | `.worktrees/devops` | `agent/devops` | Read/Write (Docker, CI/CD & Config) |
-| **T6** | `testing` | QA & Test Engineer | `.worktrees/testing` | `agent/testing` | Read/Write (Test Suites & Verification) |
-| **T7** | `reviewer` | Independent Code Reviewer| `.worktrees/reviewer` | `agent/reviewer` | **READ-ONLY** (Diff Review & Security Audits) |
-| **T8** | `research` | Research Engineer | `.worktrees/research` | `agent/research` | **READ-ONLY** (Tech Vetting & Feasibility) |
+| **T1** | `main` | Lead Orchestrator & Integrator | `.` | `main` | Read/Write (Integration & Coordination) |
+| **T2** | `backend` | APIs, Business Logic, Auth & Server Tests | `.worktrees/backend` | `agent/backend` | Read/Write |
+| **T3** | `frontend` | UI/UX, Components, Layouts & State | `.worktrees/frontend` | `agent/frontend` | Read/Write |
+| **T4** | `database` | Schema, Migrations, Optimization & Integrity | `.worktrees/database` | `agent/database` | Read/Write |
+| **T5** | `devops` | Docker, CI/CD, Deployment & Infrastructure | `.worktrees/devops` | `agent/devops` | Read/Write |
+| **T6** | `testing` | Unit, Integration, Regression & Verification | `.worktrees/testing` | `agent/testing` | Read/Write |
+| **T7** | `reviewer` | Independent Diffs, Security & Quality Review | `.worktrees/reviewer` | `agent/reviewer` | **READ-ONLY** (Diff Review & Security Audits) |
+| **T8** | `research` | Technical Investigation, Libraries & Alternatives | `.worktrees/research` | `agent/research` | **READ-ONLY** (Diff Review & Security Audits) |
 
 ---
 
