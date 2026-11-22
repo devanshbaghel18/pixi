@@ -1,0 +1,24 @@
+{
+  "name": "cool",
+  "version": "1.0.0",
+  "workers": [
+    "backend",
+    "frontend",
+    "database",
+    "devops",
+    "testing",
+    "reviewer",
+    "research"
+  ],
+  "coding_workers": [
+    "backend",
+    "frontend",
+    "database",
+    "devops",
+    "testing"
+  ],
+  "read_only_workers": [
+    "reviewer",
+    "research"
+  ]
+}
