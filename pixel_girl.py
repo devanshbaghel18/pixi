@@ -44,6 +44,70 @@ except ImportError:
         get_time_based_greeting = None
         respond = None
 
+try:
+    from companion_db import add_training_sample
+except ImportError:
+    try:
+        from .companion_db import add_training_sample
+    except Exception:
+        add_training_sample = None
+
+
+# ---------------------------------------------------------------------------
+# ML Companion Helpers: Badges and Confidence Aura Properties
+# ---------------------------------------------------------------------------
+
+def format_ml_badge(
+    intent: str,
+    intent_confidence: float,
+    emotion: str,
+    emotion_confidence: float
+) -> str:
+    """
+    Formats the real-time ML intent badge and emotion confidence percentage.
+    Example: '[GREETING] (98%) • Emotion: HAPPY (94%)'
+    """
+    int_pct = int(round(max(0.0, min(1.0, float(intent_confidence))) * 100))
+    emo_pct = int(round(max(0.0, min(1.0, float(emotion_confidence))) * 100))
+    int_name = str(intent).upper() if intent else "CHAT"
+    emo_name = str(emotion).upper() if emotion else "NORMAL"
+    return f"[{int_name}] ({int_pct}%) • Emotion: {emo_name} ({emo_pct}%)"
+
+
+def get_aura_properties(confidence: float) -> dict:
+    """
+    Determines visual confidence aura attributes based on ML confidence score (0.0 - 1.0).
+    Returns tier ('high', 'medium', 'low'), primary color, outline glow, title, particles, and radius bonus.
+    """
+    conf = max(0.0, min(1.0, float(confidence)))
+    if conf >= 0.85:
+        return {
+            "tier": "high",
+            "color": "#ffd700",       # Radiant Gold
+            "outline": "#fff3b0",     # Pale Gold Glow
+            "title": "Radiant Gold ✨",
+            "particles": ["✨", "✦", "★", "💖"],
+            "radius_bonus": 16,
+        }
+    elif conf >= 0.70:
+        return {
+            "tier": "medium",
+            "color": "#00f0ff",       # Celestial Cyan
+            "outline": "#9bf6ff",     # Soft Cyan Glow
+            "title": "Celestial Glow 🌟",
+            "particles": ["✧", "✦", "🌸"],
+            "radius_bonus": 10,
+        }
+    else:
+        return {
+            "tier": "low",
+            "color": "#b388ff",       # Soft Lavender
+            "outline": "#e7c6ff",     # Pale Lavender Glow
+            "title": "Soft Lavender 🔮",
+            "particles": ["•", "✧"],
+            "radius_bonus": 4,
+        }
+
 PALETTE = {
     " ": None,                  # Transparent / background
 
@@ -467,6 +531,8 @@ def run_terminal_app(initial_greeting=False, theme_name="Princess Pink", enable_
     print("\033[38;2;255;105;180m  ✨ ✿ Princess Mia ✿ ✨ — Terminal Companion\033[0m")
     print("\033[38;2;200;180;220m  Type 'hello', '/theme <pink|violet|sunset>', '/chime', or 'q' to exit\033[0m\n")
 
+    last_ml_info = "ML: [READY]"
+
     try:
         while running:
             now = time.time()
@@ -522,7 +588,7 @@ def run_terminal_app(initial_greeting=False, theme_name="Princess Pink", enable_
             sys.stdout.write(rendered_art + "\n")
             
             # Interactive prompt line at the bottom
-            status_hint = f"\033[38;2;170;140;200m[{current_theme} | Sound: {'ON' if enable_sound else 'OFF'}]\033[0m"
+            status_hint = f"\033[38;2;170;140;200m[{current_theme} | {last_ml_info} | Chime: {'ON' if enable_sound else 'OFF'}]\033[0m"
             sys.stdout.write(f"\033[K\n{status_hint} \033[1;38;2;255;105;180mSay something:\033[0m {input_buffer}")
             sys.stdout.flush()
             
@@ -557,8 +623,14 @@ def run_terminal_app(initial_greeting=False, theme_name="Princess Pink", enable_
                         if engine:
                             res = engine.process_message(cmd)
                             speech_text = res["reply_text"]
+                            ml_emo = res.get("emotion", "NORMAL")
+                            ml_conf = res.get("emotion_confidence", 0.85)
+                            ml_int = res.get("intent", "CHAT")
+                            ml_int_conf = res.get("intent_confidence", 0.85)
+                            last_ml_info = format_ml_badge(ml_int, ml_int_conf, ml_emo, ml_conf)
                         else:
                             speech_text = "HELLO THERE! 💖"
+                            last_ml_info = "ML: [CHAT] (85%)"
                         speech_active = True
                         speech_end_time = now + 5.0
                         if enable_sound:
@@ -621,6 +693,20 @@ class PixelGirlPopup:
         self.speech_scale = 1.0 if initial_greeting else 0.0
         self.expression = "HAPPY" if initial_greeting else "NORMAL"
         self.last_girl_shift_y = 0.0
+
+        # ML Emotion, Intent & Active Learning Feedback State
+        self.ml_confidence = 0.85
+        self.ml_emotion = self.expression
+        self.ml_intent = "GREETING" if initial_greeting else "CHAT"
+        self.ml_intent_confidence = 0.95 if initial_greeting else 0.85
+        self.ml_method = "ml" if self.dialogue_engine else "heuristic"
+        self.last_user_text = "hello" if initial_greeting else ""
+        self.feedback_given = False
+        self.aura_enabled = True
+        self.ml_badge_label = None
+        self.thumb_up_btn = None
+        self.thumb_down_btn = None
+        self.feedback_label = None
         
         self.build_ui()
         self.init_grid_cells()
@@ -731,6 +817,75 @@ class PixelGirlPopup:
             cursor="hand2"
         )
         self.sound_btn.pack(side="right")
+
+        # Top ML Status & Active Learning Feedback Bar
+        ml_bar = tk.Frame(self.root, bg="#161224", padx=12, pady=4)
+        ml_bar.pack(fill="x", padx=16, pady=(0, 2))
+
+        init_badge = format_ml_badge(self.ml_intent, self.ml_intent_confidence, self.ml_emotion, self.ml_confidence)
+        init_aura = get_aura_properties(self.ml_confidence)["title"]
+        self.ml_badge_label = tk.Label(
+            ml_bar,
+            text=f"🤖 ML: {init_badge} • Aura: {init_aura}",
+            font=("DejaVu Sans", 8, "bold"),
+            fg="#70d6ff",
+            bg="#161224"
+        )
+        self.ml_badge_label.pack(side="left")
+
+        # Feedback controls on right side of ML bar
+        fb_frame = tk.Frame(ml_bar, bg="#161224")
+        fb_frame.pack(side="right")
+
+        fb_lbl = tk.Label(
+            fb_frame,
+            text="Feedback:",
+            font=("DejaVu Sans", 7, "bold"),
+            fg="#8c7d9a",
+            bg="#161224"
+        )
+        fb_lbl.pack(side="left", padx=(0, 4))
+
+        self.thumb_up_btn = tk.Button(
+            fb_frame,
+            text="👍 Correct",
+            command=lambda: self.log_feedback(True),
+            font=("DejaVu Sans", 7, "bold"),
+            bg="#2c1e38",
+            fg="#70d6ff",
+            activebackground="#06d6a0",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=5,
+            pady=1,
+            cursor="hand2"
+        )
+        self.thumb_up_btn.pack(side="left", padx=2)
+
+        self.thumb_down_btn = tk.Button(
+            fb_frame,
+            text="👎 Wrong",
+            command=lambda: self.log_feedback(False),
+            font=("DejaVu Sans", 7, "bold"),
+            bg="#2c1e38",
+            fg="#ff70a6",
+            activebackground="#ef476f",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=5,
+            pady=1,
+            cursor="hand2"
+        )
+        self.thumb_down_btn.pack(side="left", padx=2)
+
+        self.feedback_label = tk.Label(
+            fb_frame,
+            text="",
+            font=("DejaVu Sans", 7),
+            fg="#a7c957",
+            bg="#161224"
+        )
+        self.feedback_label.pack(side="left", padx=(4, 0))
 
         # Theme Switcher Bar
         theme_bar = tk.Frame(self.root, bg="#14111d", padx=12, pady=2)
@@ -933,28 +1088,159 @@ class PixelGirlPopup:
         for item in self.cell_items.values():
             self.canvas.itemconfig(item, fill="")
 
+    def update_ml_display(self, intent: str, intent_conf: float, emotion: str, emotion_conf: float):
+        """Updates the ML status badge, intent badge, aura, and feedback buttons."""
+        self.ml_intent = intent
+        self.ml_intent_confidence = intent_conf
+        self.ml_emotion = emotion
+        self.ml_confidence = emotion_conf
+
+        aura_props = get_aura_properties(emotion_conf)
+        badge_text = format_ml_badge(intent, intent_conf, emotion, emotion_conf)
+
+        if hasattr(self, "ml_badge_label") and self.ml_badge_label:
+            self.ml_badge_label.config(
+                text=f"🤖 ML: {badge_text} • Aura: {aura_props['title']}"
+            )
+        if hasattr(self, "feedback_label") and self.feedback_label:
+            self.feedback_label.config(text="")
+        if hasattr(self, "thumb_up_btn") and self.thumb_up_btn:
+            self.thumb_up_btn.config(text="👍 Correct", state="normal", bg="#2c1e38", fg="#70d6ff")
+        if hasattr(self, "thumb_down_btn") and self.thumb_down_btn:
+            self.thumb_down_btn.config(text="👎 Wrong", state="normal", bg="#2c1e38", fg="#ff70a6")
+
+    def log_feedback(self, correct: bool, corrected_emotion=None, corrected_intent=None):
+        """
+        Logs active learning feedback into companion_db.
+        If correct=True: logs current prediction as verified sample.
+        If correct=False: logs correction to ml_dataset.
+        """
+        target_text = self.last_user_text or "Hello"
+        target_emo = corrected_emotion or self.ml_emotion
+        target_int = corrected_intent or self.ml_intent
+
+        sample_id = None
+        if add_training_sample is not None:
+            try:
+                db_p = self.dialogue_engine.db_path if self.dialogue_engine else None
+                sample_id = add_training_sample(
+                    text=target_text,
+                    emotion=target_emo,
+                    intent=target_int,
+                    split="train",
+                    source="user_feedback",
+                    db_path=db_p,
+                )
+            except Exception:
+                sample_id = None
+
+        self.feedback_given = True
+        self.play_chime()
+
+        if correct:
+            msg = "✔ Learned! 🌸"
+            if hasattr(self, "thumb_up_btn") and self.thumb_up_btn:
+                self.thumb_up_btn.config(text="👍 Saved", state="disabled", bg="#1b4332", fg="#a7c957")
+        else:
+            msg = f"Feedback noted ({target_emo}/{target_int}) ✨"
+            if hasattr(self, "thumb_down_btn") and self.thumb_down_btn:
+                self.thumb_down_btn.config(text="👎 Logged", state="disabled", bg="#49111c", fg="#f28482")
+
+        if hasattr(self, "feedback_label") and self.feedback_label:
+            self.feedback_label.config(text=msg)
+
+        return True
+
+    def draw_confidence_aura(self, cx, cy, t):
+        """
+        Renders the animated visual confidence aura behind Princess Mia.
+        Aura intensity, color rings, and sparkle particles dynamically adapt to ML confidence.
+        """
+        self.canvas.delete("aura")
+        if not self.aura_enabled:
+            return
+
+        conf = getattr(self, "ml_confidence", 0.85)
+        props = get_aura_properties(conf)
+        base_color = props["color"]
+        outline_color = props["outline"]
+        radius_bonus = props["radius_bonus"]
+
+        pulse = math.sin(t * 3.0) * 4.0
+        rx = (self.num_cols * self.pixel_size * 0.44) + radius_bonus + pulse
+        ry = (self.num_rows * self.pixel_size * 0.46) + radius_bonus + pulse
+
+        # Concentric glowing aura rings
+        for ring_idx in (3, 2, 1):
+            scale_r = 1.0 + (ring_idx * 0.08)
+            x1 = cx - (rx * scale_r)
+            y1 = cy - (ry * scale_r)
+            x2 = cx + (rx * scale_r)
+            y2 = cy + (ry * scale_r)
+            width = max(1, ring_idx)
+            self.canvas.create_oval(
+                x1, y1, x2, y2,
+                outline=outline_color if ring_idx == 1 else base_color,
+                width=width,
+                tags=("aura",)
+            )
+
+        # Orbiting aura sparkle particles
+        particles = props["particles"]
+        num_particles = 6 if conf >= 0.85 else 4
+        for i in range(num_particles):
+            angle = (i * (2 * math.pi / num_particles)) + (t * 1.5)
+            px = cx + math.cos(angle) * (rx + 8 + math.sin(t * 4 + i) * 3)
+            py = cy + math.sin(angle) * (ry + 8 + math.cos(t * 4 + i) * 3)
+            p_char = particles[i % len(particles)]
+            self.canvas.create_text(
+                px, py,
+                text=p_char,
+                font=("DejaVu Sans", 9, "bold"),
+                fill=base_color,
+                tags=("aura",)
+            )
+
+        # Always layer aura behind the girl pixel cells
+        self.canvas.tag_lower("aura", "girl")
+
     def handle_user_input(self, user_text: str):
         """Processes user input through DialogueEngine and updates UI reactions."""
         if not user_text:
             return
-            
+
+        self.last_user_text = user_text
+        self.feedback_given = False
+
         if self.dialogue_engine:
             res = self.dialogue_engine.process_message(user_text)
             reply = res["reply_text"]
             emotion = res.get("emotion", "NORMAL")
+            emo_conf = res.get("emotion_confidence", 0.85)
+            intent = res.get("intent", "CHAT")
+            int_conf = res.get("intent_confidence", 0.85)
             friendship = res.get("friendship_level", self.friendship_level)
+
             self.update_friendship_display(friendship)
+            self.update_ml_display(intent, int_conf, emotion, emo_conf)
             self.trigger_speech(reply, emotion=emotion)
             self.play_chime()
         else:
             lower = user_text.lower()
             if "hello" in lower or "hi" in lower:
                 reply = "HELLO! ♥"
+                intent = "GREETING"
+                emotion = "HAPPY"
             elif "love" in lower or "cute" in lower:
                 reply = "AWH, LOVE! ♥"
+                intent = "COMPLIMENT"
+                emotion = "LOVE"
             else:
                 reply = "HELLO THERE! 💖"
-            self.trigger_speech(reply, emotion="HAPPY")
+                intent = "CHAT"
+                emotion = "HAPPY"
+            self.update_ml_display(intent, 0.85, emotion, 0.85)
+            self.trigger_speech(reply, emotion=emotion)
             self.play_chime()
 
     def on_send(self):
@@ -1133,6 +1419,11 @@ class PixelGirlPopup:
         dy = breath_y - self.last_girl_shift_y
         self.canvas.move("girl", 0, dy)
         self.last_girl_shift_y = breath_y
+
+        # 4.5. Render visual confidence aura radiating behind girl
+        girl_cx = self.canvas_w / 2.0
+        girl_cy = self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0) + self.last_girl_shift_y
+        self.draw_confidence_aura(girl_cx, girl_cy, t)
         
         # 5. Render speech cloud if active
         if self.speech_active and self.speech_scale > 0.02:

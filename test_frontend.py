@@ -20,6 +20,8 @@ from pixel_girl import (
     PALETTE_PRINCESS_PINK,
     THEMES,
     PixelGirlPopup,
+    format_ml_badge,
+    get_aura_properties,
     get_friendship_rank,
     get_theme_palette,
     render_ansi_grid,
@@ -172,6 +174,100 @@ class TestPixelGirlPopupGUI(unittest.TestCase):
         self.assertTrue(self.app.speech_active)
         self.assertIn("Good morning", self.app.speech_text)
         self.assertEqual(self.app.expression, "HAPPY")
+
+    def test_ml_initial_state(self):
+        """PixelGirlPopup initializes ML confidence, intent, aura, and feedback buttons."""
+        self.assertIsNotNone(self.app.ml_badge_label)
+        self.assertIsNotNone(self.app.thumb_up_btn)
+        self.assertIsNotNone(self.app.thumb_down_btn)
+        self.assertIsNotNone(self.app.feedback_label)
+        self.assertTrue(self.app.aura_enabled)
+        self.assertTrue(0.0 <= self.app.ml_confidence <= 1.0)
+        self.assertTrue(0.0 <= self.app.ml_intent_confidence <= 1.0)
+        badge_txt = self.app.ml_badge_label.cget("text")
+        self.assertIn("ML:", badge_txt)
+        self.assertIn("Aura:", badge_txt)
+
+    def test_update_ml_display(self):
+        """update_ml_display updates intent badge, emotion percentage, and aura title."""
+        self.app.update_ml_display("COMPLIMENT", 0.96, "LOVE", 0.92)
+        self.assertEqual(self.app.ml_intent, "COMPLIMENT")
+        self.assertEqual(self.app.ml_intent_confidence, 0.96)
+        self.assertEqual(self.app.ml_emotion, "LOVE")
+        self.assertEqual(self.app.ml_confidence, 0.92)
+
+        badge_text = self.app.ml_badge_label.cget("text")
+        self.assertIn("[COMPLIMENT]", badge_text)
+        self.assertIn("96%", badge_text)
+        self.assertIn("LOVE", badge_text)
+        self.assertIn("92%", badge_text)
+        self.assertIn("Radiant Gold", badge_text)
+
+    def test_active_learning_feedback_thumbs_up(self):
+        """Clicking thumbs up records user feedback sample and updates button state."""
+        self.app.handle_user_input("Good morning Mia! You are so cute! 💕")
+        success = self.app.log_feedback(True)
+        self.assertTrue(success)
+        self.assertTrue(self.app.feedback_given)
+        self.assertEqual(self.app.thumb_up_btn.cget("text"), "👍 Saved")
+        self.assertEqual(self.app.thumb_up_btn.cget("state"), "disabled")
+        self.assertIn("Learned", self.app.feedback_label.cget("text"))
+
+    def test_active_learning_feedback_thumbs_down(self):
+        """Clicking thumbs down logs correction and updates button state."""
+        self.app.handle_user_input("What is the weather outside?")
+        success = self.app.log_feedback(False, corrected_emotion="NORMAL", corrected_intent="QUESTION")
+        self.assertTrue(success)
+        self.assertTrue(self.app.feedback_given)
+        self.assertEqual(self.app.thumb_down_btn.cget("text"), "👎 Logged")
+        self.assertEqual(self.app.thumb_down_btn.cget("state"), "disabled")
+        self.assertIn("Feedback noted", self.app.feedback_label.cget("text"))
+
+    def test_visual_confidence_aura_rendering(self):
+        """draw_confidence_aura creates canvas items with tag 'aura'."""
+        self.app.draw_confidence_aura(150, 150, 1.0)
+        items = self.app.canvas.find_withtag("aura")
+        self.assertGreater(len(items), 0)
+
+    def test_confidence_aura_toggle(self):
+        """Disabling aura removes or suppresses aura items."""
+        self.app.aura_enabled = False
+        self.app.draw_confidence_aura(150, 150, 1.0)
+        items = self.app.canvas.find_withtag("aura")
+        self.assertEqual(len(items), 0)
+        self.app.aura_enabled = True
+
+
+class TestMLBadgeAndAuraCalculations(unittest.TestCase):
+    """Tests ML badge formatting and confidence aura tier calculations."""
+
+    def test_format_ml_badge(self):
+        cases = [
+            ("GREETING", 0.985, "HAPPY", 0.941, "[GREETING] (98%) • Emotion: HAPPY (94%)"),
+            ("COMPLIMENT", 0.850, "LOVE", 0.760, "[COMPLIMENT] (85%) • Emotion: LOVE (76%)"),
+            ("CHAT", 0.500, "NORMAL", 0.600, "[CHAT] (50%) • Emotion: NORMAL (60%)"),
+        ]
+        for intent, int_conf, emo, emo_conf, expected in cases:
+            with self.subTest(intent=intent, emo=emo):
+                res = format_ml_badge(intent, int_conf, emo, emo_conf)
+                self.assertEqual(res, expected)
+
+    def test_aura_properties_tiers(self):
+        high = get_aura_properties(0.95)
+        self.assertEqual(high["tier"], "high")
+        self.assertEqual(high["color"], "#ffd700")
+        self.assertIn("Radiant Gold", high["title"])
+        self.assertGreaterEqual(high["radius_bonus"], 14)
+
+        medium = get_aura_properties(0.75)
+        self.assertEqual(medium["tier"], "medium")
+        self.assertEqual(medium["color"], "#00f0ff")
+        self.assertIn("Celestial Glow", medium["title"])
+
+        low = get_aura_properties(0.45)
+        self.assertEqual(low["tier"], "low")
+        self.assertEqual(low["color"], "#b388ff")
+        self.assertIn("Soft Lavender", low["title"])
 
 
 if __name__ == "__main__":
