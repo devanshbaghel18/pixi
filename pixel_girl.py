@@ -47,12 +47,22 @@ except ImportError:
         respond = None
 
 try:
-    from companion_db import add_training_sample
+    from companion_db import (
+        add_training_sample,
+        get_scene_setting,
+        set_scene_setting,
+    )
 except ImportError:
     try:
-        from .companion_db import add_training_sample
+        from .companion_db import (
+            add_training_sample,
+            get_scene_setting,
+            set_scene_setting,
+        )
     except Exception:
         add_training_sample = None
+        get_scene_setting = None
+        set_scene_setting = None
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +317,36 @@ THEMES = {
 def get_theme_palette(name="Princess Pink"):
     """Returns the palette dictionary for the specified theme name."""
     return THEMES.get(name, THEMES["Princess Pink"])
+
+# ---------------------------------------------------------------------------
+# Interactive Scenes & Background Environments
+# ---------------------------------------------------------------------------
+
+SCENES = {
+    "Sakura Park": {
+        "title": "Sakura Park 🌸",
+        "bg_color": "#14111d",
+        "ground_shadow": "#251c2e",
+        "desc": "Cherry blossoms fluttering softly in spring breeze",
+    },
+    "Midnight Stars": {
+        "title": "Midnight Stars 🌙",
+        "bg_color": "#0a0914",
+        "ground_shadow": "#151326",
+        "desc": "Cosmic balcony under a canopy of twinkling stars and shooting meteors",
+    },
+    "Cozy Study": {
+        "title": "Cozy Study ☕",
+        "bg_color": "#181310",
+        "ground_shadow": "#2c1f18",
+        "desc": "Warm amber lamp glow, window rain droplets, and steaming tea",
+    },
+}
+
+DEFAULT_SCENE = "Sakura Park"
+
+def get_scene_data(name="Sakura Park"):
+    return SCENES.get(name, SCENES[DEFAULT_SCENE])
 
 def get_friendship_rank(level: int):
     """Returns (rank_title, badge_icon) for a given friendship level."""
@@ -905,6 +945,21 @@ class PixelGirlPopup:
         self.thinking_text = "Thinking..."
         self.thinking_start_time = 0.0
 
+        # Scene & Environment State
+        db_p = self.dialogue_engine.db_path if self.dialogue_engine else None
+        if get_scene_setting:
+            try:
+                self.current_scene = get_scene_setting("current_scene", default=DEFAULT_SCENE, db_path=db_p)
+            except Exception:
+                self.current_scene = DEFAULT_SCENE
+        else:
+            self.current_scene = DEFAULT_SCENE
+
+        self.scene_buttons = {}
+        self.scene_elements = []
+        self.shooting_star = None
+        self.last_shooting_star_time = 0.0
+
         # ML Emotion, Intent & Active Learning Feedback State
         self.ml_confidence = 0.85
         self.ml_emotion = self.expression
@@ -921,6 +976,7 @@ class PixelGirlPopup:
         
         self.build_ui()
         self.init_grid_cells()
+        self.init_scene_elements()
         
         # Start animation loop (~30 fps)
         self.root.after(30, self.update_animation)
@@ -941,6 +997,193 @@ class PixelGirlPopup:
                 
         # Force re-render of all cells with new colors
         self.refresh_all_cells()
+
+    def set_scene(self, scene_name: str):
+        """Switches the interactive background scene environment."""
+        if scene_name not in SCENES:
+            return
+        self.current_scene = scene_name
+        data = get_scene_data(scene_name)
+
+        # Update canvas bg
+        if hasattr(self, "canvas") and self.canvas:
+            self.canvas.config(bg=data["bg_color"])
+
+        # Persist scene preference to DB
+        db_p = self.dialogue_engine.db_path if self.dialogue_engine else None
+        if set_scene_setting:
+            try:
+                set_scene_setting("current_scene", scene_name, db_path=db_p)
+            except Exception:
+                pass
+
+        # Update button highlights
+        for name, btn in self.scene_buttons.items():
+            if name == scene_name:
+                btn.config(bg="#d81b60", fg="#ffffff")
+            else:
+                btn.config(bg="#2c1e38", fg="#c0adc8")
+
+        # Re-initialize ambient elements for new scene
+        self.init_scene_elements()
+        self.play_chime()
+
+    def init_scene_elements(self):
+        """Initializes ambient elements appropriate for the active scene."""
+        self.scene_elements = []
+        self.shooting_star = None
+        w = self.canvas_w
+        h = self.canvas_h
+
+        if self.current_scene == "Sakura Park":
+            for _ in range(18):
+                self.scene_elements.append({
+                    "type": "petal",
+                    "x": random.uniform(0, w),
+                    "y": random.uniform(0, h),
+                    "vx": random.uniform(0.6, 1.8),
+                    "vy": random.uniform(0.8, 2.2),
+                    "size": random.uniform(3.0, 6.0),
+                    "phase": random.uniform(0, 2 * math.pi),
+                    "rot_speed": random.uniform(1.5, 3.5),
+                    "color": random.choice(["#ffb7b2", "#ffccd5", "#ffc6ff", "#ffa6c9", "#ffd1dc"]),
+                })
+        elif self.current_scene == "Midnight Stars":
+            for _ in range(35):
+                self.scene_elements.append({
+                    "type": "star",
+                    "x": random.uniform(8, w - 8),
+                    "y": random.uniform(8, h - 30),
+                    "size": random.uniform(1.2, 3.0),
+                    "twinkle_speed": random.uniform(1.5, 4.5),
+                    "phase": random.uniform(0, 2 * math.pi),
+                    "char": random.choice(["✦", "✧", "⋆", "•", "★"]),
+                    "color": random.choice(["#ffffff", "#e0e7ff", "#c7d2fe", "#fef08a", "#a5f3fc"]),
+                })
+        elif self.current_scene == "Cozy Study":
+            for _ in range(22):
+                self.scene_elements.append({
+                    "type": "rain",
+                    "x": random.uniform(0, w),
+                    "y": random.uniform(0, h),
+                    "length": random.uniform(8.0, 16.0),
+                    "vy": random.uniform(6.0, 11.0),
+                    "vx": random.uniform(-1.0, -0.4),
+                    "color": random.choice(["#4a5568", "#718096", "#a0aec0"]),
+                })
+
+    def update_and_draw_scene_elements(self, t):
+        """Updates and renders ambient background elements behind Mia."""
+        self.canvas.delete("scene_bg")
+        w = self.canvas_w
+        h = self.canvas_h
+        now = time.time()
+
+        if self.current_scene == "Sakura Park":
+            for p in self.scene_elements:
+                p["phase"] += 0.05
+                p["x"] += p["vx"] + math.sin(p["phase"]) * 1.0
+                p["y"] += p["vy"]
+                if p["y"] > h:
+                    p["y"] = -10
+                    p["x"] = random.uniform(0, w * 0.7)
+                if p["x"] > w:
+                    p["x"] = -10
+
+                rx = p["size"] * (0.8 + 0.4 * math.sin(p["phase"]))
+                ry = p["size"] * (0.6 + 0.3 * math.cos(p["phase"]))
+                self.canvas.create_oval(
+                    p["x"] - rx, p["y"] - ry, p["x"] + rx, p["y"] + ry,
+                    fill=p["color"], outline="", tags=("scene_bg",)
+                )
+
+        elif self.current_scene == "Midnight Stars":
+            moon_x, moon_y = w - 40, 36
+            self.canvas.create_text(
+                moon_x, moon_y, text="🌙",
+                font=("DejaVu Sans", 22),
+                fill="#fef08a", tags=("scene_bg",)
+            )
+
+            for s in self.scene_elements:
+                twinkle = (math.sin(t * s["twinkle_speed"] + s["phase"]) + 1.0) / 2.0
+                if twinkle > 0.25:
+                    font_size = max(6, int(s["size"] * (0.8 + 0.6 * twinkle)))
+                    self.canvas.create_text(
+                        s["x"], s["y"], text=s["char"],
+                        font=("DejaVu Sans", font_size),
+                        fill=s["color"], tags=("scene_bg",)
+                    )
+
+            if self.shooting_star is None:
+                if now - self.last_shooting_star_time > 4.5 and random.random() < 0.25:
+                    self.shooting_star = {
+                        "x": random.uniform(20, w * 0.6),
+                        "y": random.uniform(10, h * 0.35),
+                        "vx": random.uniform(9.0, 15.0),
+                        "vy": random.uniform(4.5, 8.0),
+                        "life": 1.0,
+                    }
+                    self.last_shooting_star_time = now
+            else:
+                m = self.shooting_star
+                m["x"] += m["vx"]
+                m["y"] += m["vy"]
+                m["life"] -= 0.05
+                tail_x = m["x"] - m["vx"] * 2.2
+                tail_y = m["y"] - m["vy"] * 2.2
+                self.canvas.create_line(
+                    tail_x, tail_y, m["x"], m["y"],
+                    fill="#ffffff", width=2, tags=("scene_bg",)
+                )
+                self.canvas.create_text(
+                    m["x"], m["y"], text="✦",
+                    font=("DejaVu Sans", 8, "bold"),
+                    fill="#ffd700", tags=("scene_bg",)
+                )
+                if m["life"] <= 0 or m["x"] > w or m["y"] > h:
+                    self.shooting_star = None
+
+        elif self.current_scene == "Cozy Study":
+            lamp_x, lamp_y = 45, 45
+            self.canvas.create_oval(
+                lamp_x - 30, lamp_y - 25, lamp_x + 30, lamp_y + 25,
+                fill="#3a2518", outline="#523420", tags=("scene_bg",)
+            )
+            self.canvas.create_text(
+                lamp_x, lamp_y, text="💡",
+                font=("DejaVu Sans", 18),
+                fill="#ffd166", tags=("scene_bg",)
+            )
+
+            mug_x, mug_y = w - 42, h - 45
+            self.canvas.create_text(
+                mug_x, mug_y, text="☕",
+                font=("DejaVu Sans", 16),
+                tags=("scene_bg",)
+            )
+            for i in range(3):
+                s_phase = t * 3.0 + i * 1.5
+                sx = mug_x + math.sin(s_phase) * 3.0
+                sy = mug_y - 12 - ((s_phase * 6.0) % 20.0)
+                self.canvas.create_text(
+                    sx, sy, text="~",
+                    font=("DejaVu Sans", 9, "bold"),
+                    fill="#a0aec0", tags=("scene_bg",)
+                )
+
+            for r in self.scene_elements:
+                r["y"] += r["vy"]
+                r["x"] += r["vx"]
+                if r["y"] > h:
+                    r["y"] = -15
+                    r["x"] = random.uniform(0, w)
+                self.canvas.create_line(
+                    r["x"], r["y"], r["x"] + r["vx"] * 2, r["y"] + r["length"],
+                    fill=r["color"], width=1, tags=("scene_bg",)
+                )
+
+        self.canvas.tag_lower("scene_bg")
 
     def toggle_sound(self):
         """Toggles audio chime / bell option."""
@@ -1135,13 +1378,52 @@ class PixelGirlPopup:
             )
             btn.pack(side="left", padx=3)
             self.theme_buttons[theme_key] = btn
+
+        # Scene Switcher Bar
+        scene_bar = tk.Frame(self.root, bg="#14111d", padx=12, pady=2)
+        scene_bar.pack(fill="x", padx=16, pady=(0, 2))
+
+        scene_lbl = tk.Label(
+            scene_bar,
+            text="🌄 Scene:",
+            font=("DejaVu Sans", 8, "bold"),
+            fg="#8c7d9a",
+            bg="#14111d"
+        )
+        scene_lbl.pack(side="left", padx=(0, 6))
+
+        scene_buttons_data = [
+            ("Sakura Park", "🌸 Sakura Park"),
+            ("Midnight Stars", "🌙 Midnight Stars"),
+            ("Cozy Study", "☕ Cozy Study"),
+        ]
+
+        for scene_key, btn_text in scene_buttons_data:
+            is_active = (scene_key == self.current_scene)
+            btn = tk.Button(
+                scene_bar,
+                text=btn_text,
+                command=lambda k=scene_key: self.set_scene(k),
+                font=("DejaVu Sans", 8, "bold"),
+                bg="#d81b60" if is_active else "#2c1e38",
+                fg="#ffffff" if is_active else "#c0adc8",
+                activebackground="#ff4081",
+                activeforeground="#ffffff",
+                relief="flat",
+                padx=8,
+                pady=2,
+                cursor="hand2"
+            )
+            btn.pack(side="left", padx=3)
+            self.scene_buttons[scene_key] = btn
         
         # Pixel Art Canvas
+        canvas_bg = get_scene_data(self.current_scene)["bg_color"]
         self.canvas = tk.Canvas(
             self.root,
             width=self.canvas_w,
             height=self.canvas_h,
-            bg="#14111d",
+            bg=canvas_bg,
             highlightthickness=0
         )
         self.canvas.pack(padx=10, pady=2)
@@ -1956,6 +2238,9 @@ class PixelGirlPopup:
         sparkle_idx = (self.frame_count // 5) % len(SPARKLE_FRAMES)
         grid = build_frame(face, sparkle_idx, arm_pose=arm_pose, jump_legs=jump_legs)
         self.render_girl_frame(grid)
+
+        # 4.5. Render ambient background elements for current scene (petals, stars, rain)
+        self.update_and_draw_scene_elements(t)
         
         # 5. Combined vertical physics movement (Idle breath + action jump/squash)
         breath_y = math.sin(t * 2.2) * 2.0
