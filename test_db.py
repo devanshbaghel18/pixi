@@ -17,7 +17,9 @@ from companion_db import (
     SEED_DATASET,
     add_training_sample,
     clear_db,
+    get_conversation_context,
     get_dataset_stats,
+    get_memory_facts,
     get_model_runs,
     get_recent_interactions,
     get_state,
@@ -28,6 +30,7 @@ from companion_db import (
     init_db,
     log_interaction,
     log_model_run,
+    save_memory_fact,
     set_state,
 )
 
@@ -365,6 +368,50 @@ class TestCompanionDB(unittest.TestCase):
         self.assertIn("HAPPY", stats["emotion_breakdown"])
         self.assertIn("GREETING", stats["intent_breakdown"])
         self.assertIn("seed", stats["source_breakdown"])
+
+    def test_companion_memories_crud_and_upsert(self):
+        """Tests saving, updating, and retrieving relationship memory facts."""
+        init_db(self.db_path)
+
+        id1 = save_memory_fact("partner_nickname", "Darling", category="personal", db_path=self.db_path)
+        self.assertIsNotNone(id1)
+        save_memory_fact("favorite_flower", "Pink Roses", category="preferences", db_path=self.db_path)
+        save_memory_fact("anniversary", "November 23", category="milestones", db_path=self.db_path)
+
+        # Retrieve all
+        all_memories = get_memory_facts(db_path=self.db_path)
+        self.assertEqual(len(all_memories), 3)
+
+        # Retrieve by category
+        pref = get_memory_facts(category="preferences", db_path=self.db_path)
+        self.assertEqual(len(pref), 1)
+        self.assertEqual(pref[0]["key"], "favorite_flower")
+        self.assertEqual(pref[0]["value"], "Pink Roses")
+
+        # Test upsert / update on existing key
+        save_memory_fact("partner_nickname", "Sweetheart", category="personal", db_path=self.db_path)
+        updated = get_memory_facts(category="personal", db_path=self.db_path)
+        self.assertEqual(len(updated), 1)
+        self.assertEqual(updated[0]["value"], "Sweetheart")
+
+    def test_get_conversation_context_format_and_order(self):
+        """Tests retrieving conversation context for LLM multi-turn prompting."""
+        init_db(self.db_path)
+
+        # Log 4 sequential interactions
+        log_interaction("Hello Mia!", "Hello darling! 🌸", emotion="HAPPY", db_path=self.db_path)
+        log_interaction("I had a busy day today", "Aww, make sure to take a rest! ✨", emotion="NORMAL", db_path=self.db_path)
+        log_interaction("You look so cute!", "Aww, you make my heart flutter! 💖", emotion="LOVE", db_path=self.db_path)
+        log_interaction("What are you thinking about?", "I'm thinking about you! 🥰", emotion="LOVE", db_path=self.db_path)
+
+        # Request last 2 interactions context
+        context = get_conversation_context(limit=2, db_path=self.db_path)
+        # Should contain 4 messages: 2 pairs of user + assistant in chronological order
+        self.assertEqual(len(context), 4)
+        self.assertEqual(context[0], {"role": "user", "content": "You look so cute!"})
+        self.assertEqual(context[1], {"role": "assistant", "content": "Aww, you make my heart flutter! 💖"})
+        self.assertEqual(context[2], {"role": "user", "content": "What are you thinking about?"})
+        self.assertEqual(context[3], {"role": "assistant", "content": "I'm thinking about you! 🥰"})
 
 
 if __name__ == "__main__":
