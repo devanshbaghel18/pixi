@@ -15,6 +15,34 @@ import time
 import math
 import select
 import threading
+import textwrap
+
+try:
+    from dialogue_engine import (
+        DialogueEngine,
+        Emotion,
+        classify_emotion,
+        is_greeting,
+        get_time_based_greeting,
+        respond,
+    )
+except ImportError:
+    try:
+        from .dialogue_engine import (
+            DialogueEngine,
+            Emotion,
+            classify_emotion,
+            is_greeting,
+            get_time_based_greeting,
+            respond,
+        )
+    except Exception:
+        DialogueEngine = None
+        Emotion = None
+        classify_emotion = None
+        is_greeting = None
+        get_time_based_greeting = None
+        respond = None
 
 PALETTE = {
     " ": None,                  # Transparent / background
@@ -91,6 +119,141 @@ PALETTE = {
     "y": (210, 225, 245),       # Cloud soft shaded edge
     "T": (255, 40, 120),        # Cloud animated text
 }
+
+# ---------------------------------------------------------------------------
+# Theme Palettes: Princess Pink (Default), Midnight Violet, Golden Sunset
+# ---------------------------------------------------------------------------
+
+PALETTE_PRINCESS_PINK = dict(PALETTE)
+
+PALETTE_MIDNIGHT_VIOLET = dict(PALETTE)
+PALETTE_MIDNIGHT_VIOLET.update({
+    "*": (128, 255, 219),       # Turquoise sparkle
+    "+": (114, 239, 221),       # Cyan light sparkle
+    "~": (199, 125, 255),       # Soft violet sparkle
+    "v": (157, 78, 221),        # Violet heart
+    "V": (90, 24, 154),         # Dark violet outline
+
+    # Hair (Silvery Moonlit Lavender / Ash Violet)
+    "H": (34, 34, 59),          # Deep shadow
+    "h": (74, 78, 105),         # Main base
+    "L": (108, 117, 125),       # Mid tone
+    "l": (173, 181, 189),       # Highlight
+    "j": (233, 236, 239),       # Glossy platinum shine
+
+    # Head Bow
+    "R": (36, 0, 70),           # Deep violet outline
+    "r": (60, 9, 108),          # Shadow
+    "Q": (90, 24, 154),         # Mystic purple
+    "q": (157, 78, 221),        # Bright lilac highlight
+    "W": (245, 240, 255),       # White/silver lace
+
+    # Dress
+    "D": (20, 0, 45),           # Dark night outline
+    "d": (50, 10, 85),          # Shadow folds
+    "P": (123, 44, 191),        # Royal purple body
+    "p": (157, 78, 221),        # Vibrant violet body
+    "X": (199, 125, 255),       # Pastel lavender highlight
+    "x": (224, 170, 255),       # Soft glowing lilac
+    "w": (240, 235, 255),       # Pale starlight lace
+
+    # Sash
+    "Z": (16, 0, 43),           # Sash deep fold
+    "z": (60, 9, 108),          # Sash shadow
+    "A": (90, 24, 154),         # Sash purple
+    "a": (157, 78, 221),        # Sash highlight
+
+    # Flowers Bouquet
+    "G": (20, 70, 85),          # Dark teal foliage
+    "g": (40, 140, 160),        # Bright cyan foliage
+    "F": (160, 230, 255),       # Crystal blue blossom
+    "f": (210, 245, 255),       # Pale light petals
+    "C": (180, 80, 255),        # Violet mini blossom
+
+    # Shoes & Socks
+    "k": (235, 235, 250),       # Pale silver-white socks
+    "K": (180, 180, 210),       # Socks shadow
+    "U": (60, 9, 108),          # Amethyst dark shoe
+    "u": (157, 78, 221),        # Bright violet shoe
+    "M": (20, 0, 45),           # Shoe sole
+    ".": (160, 140, 190),       # Ground shadow
+})
+
+PALETTE_GOLDEN_SUNSET = dict(PALETTE)
+PALETTE_GOLDEN_SUNSET.update({
+    "*": (255, 209, 102),       # Warm amber sparkle
+    "+": (255, 243, 176),       # Sunlight sparkle
+    "~": (255, 160, 122),       # Peach sparkle
+    "v": (231, 111, 81),        # Sunset heart
+    "V": (154, 3, 30),          # Warm maroon outline
+
+    # Hair (Espresso & Golden Honey Caramel)
+    "H": (32, 15, 7),           # Deep espresso shadow
+    "h": (56, 29, 17),          # Warm chocolate base
+    "L": (111, 56, 30),         # Warm cinnamon mid-tone
+    "l": (176, 125, 56),        # Golden honey highlight
+    "j": (252, 211, 77),        # Golden blonde shine
+
+    # Head Bow
+    "R": (120, 0, 0),           # Deep crimson outline
+    "r": (193, 18, 31),         # Crimson shadow
+    "Q": (247, 127, 0),         # Vibrant tangerine
+    "q": (252, 191, 73),        # Warm marigold highlight
+    "W": (255, 252, 235),       # Warm ivory lace
+
+    # Dress
+    "D": (128, 14, 19),         # Deep wine outline
+    "d": (173, 40, 49),         # Coral shadow folds
+    "P": (255, 107, 107),       # Sunset coral pink body
+    "p": (255, 160, 122),       # Light peach body
+    "X": (255, 209, 102),       # Golden amber highlight
+    "x": (255, 243, 176),       # Soft sun glow
+    "w": (255, 250, 230),       # Warm cream lace
+
+    # Sash
+    "Z": (120, 20, 20),         # Sash deep fold
+    "z": (190, 50, 40),         # Sash shadow
+    "A": (244, 162, 97),        # Sash golden peach
+    "a": (255, 190, 11),        # Sash bright gold
+
+    # Flowers Bouquet
+    "G": (40, 80, 30),          # Warm moss green
+    "g": (90, 160, 60),         # Bright olive leaf
+    "F": (255, 180, 0),         # Sunburst yellow
+    "f": (255, 230, 120),       # Pale sunflower
+    "C": (230, 60, 40),         # Scarlet mini rose
+
+    # Shoes & Socks
+    "k": (255, 250, 240),       # Creamy socks
+    "K": (220, 210, 195),       # Socks warm shadow
+    "U": (107, 15, 26),         # Burgundy shoe
+    "u": (217, 4, 41),          # Bright ruby-coral shoe
+    "M": (55, 6, 23),           # Shoe sole
+    ".": (230, 185, 165),       # Ground shadow
+})
+
+THEMES = {
+    "Princess Pink": PALETTE_PRINCESS_PINK,
+    "Midnight Violet": PALETTE_MIDNIGHT_VIOLET,
+    "Golden Sunset": PALETTE_GOLDEN_SUNSET,
+}
+
+def get_theme_palette(name="Princess Pink"):
+    """Returns the palette dictionary for the specified theme name."""
+    return THEMES.get(name, THEMES["Princess Pink"])
+
+def get_friendship_rank(level: int):
+    """Returns (rank_title, badge_icon) for a given friendship level."""
+    if level >= 30:
+        return "Best Friend Forever", "👑"
+    elif level >= 20:
+        return "Close Companion", "💖"
+    elif level >= 10:
+        return "Good Friend", "🌸"
+    elif level >= 5:
+        return "Friendly Acquaintance", "🌱"
+    else:
+        return "New Friend", "✨"
 
 BASE_ART = [
     # 0..1: Floating heart & sparkles
@@ -246,8 +409,10 @@ def build_frame(face_type="OPEN", sparkle_idx=0):
         
     return frame
 
-def render_ansi_grid(lines):
+def render_ansi_grid(lines, palette=None):
     """Renders pixel art lines using unicode half-blocks and 24-bit ANSI colors."""
+    if palette is None:
+        palette = PALETTE
     num_rows = len(lines)
     num_cols = len(lines[0])
     output = []
@@ -261,8 +426,8 @@ def render_ansi_grid(lines):
             top_char = top_row[col_idx] if col_idx < len(top_row) else " "
             bot_char = bot_row[col_idx] if col_idx < len(bot_row) else " "
             
-            top_color = PALETTE.get(top_char)
-            bot_color = PALETTE.get(bot_char)
+            top_color = palette.get(top_char)
+            bot_color = palette.get(bot_char)
             
             if top_color is None and bot_color is None:
                 line_chars.append(" ")
@@ -284,7 +449,7 @@ def render_ansi_grid(lines):
 # Terminal Mode Animation
 # ---------------------------------------------------------------------------
 
-def run_terminal_app(initial_greeting=False):
+def run_terminal_app(initial_greeting=False, theme_name="Princess Pink", enable_sound=True):
     """Runs interactive animated companion inside the terminal."""
     print("\033[2J\033[H\033[?25l", end="", flush=True)  # Clear screen, hide cursor
     
@@ -295,9 +460,12 @@ def run_terminal_app(initial_greeting=False):
     frame_count = 0
     running = True
     input_buffer = ""
+    current_theme = theme_name
+    palette = get_theme_palette(current_theme)
+    engine = DialogueEngine() if DialogueEngine else None
     
     print("\033[38;2;255;105;180m  ✨ ✿ Princess Mia ✿ ✨ — Terminal Companion\033[0m")
-    print("\033[38;2;200;180;220m  Type 'hello' and hit Enter! (or 'q' to exit)\033[0m\n")
+    print("\033[38;2;200;180;220m  Type 'hello', '/theme <pink|violet|sunset>', '/chime', or 'q' to exit\033[0m\n")
 
     try:
         while running:
@@ -329,10 +497,9 @@ def run_terminal_app(initial_greeting=False):
             # If speech cloud is active, render cloud lines above her head
             cloud_lines = []
             if speech_active:
-                # Animated cloud text shimmer
-                bounce = " " if (frame_count % 4 < 2) else "  "
+                short_text = speech_text[:28]
                 cloud_top = "          ╭────────────────────────╮    "
-                cloud_mid = f"       (  ✨   {speech_text}   ✨ )  "
+                cloud_mid = f"       (  ✨   {short_text.center(16)}   ✨ )  "
                 cloud_bot = "          ╰───────╮  ──────────────╯    "
                 cloud_pt1 = "                  ╰─╮                   "
                 cloud_pt2 = "                     o                  "
@@ -351,11 +518,12 @@ def run_terminal_app(initial_greeting=False):
             for c_line in cloud_lines:
                 sys.stdout.write(f"{c_line}\033[K\n")
                 
-            rendered_art = render_ansi_grid(grid)
+            rendered_art = render_ansi_grid(grid, palette=palette)
             sys.stdout.write(rendered_art + "\n")
             
             # Interactive prompt line at the bottom
-            sys.stdout.write(f"\033[K\n\033[1;38;2;255;105;180mSay something (e.g. 'hello'):\033[0m {input_buffer}")
+            status_hint = f"\033[38;2;170;140;200m[{current_theme} | Sound: {'ON' if enable_sound else 'OFF'}]\033[0m"
+            sys.stdout.write(f"\033[K\n{status_hint} \033[1;38;2;255;105;180mSay something:\033[0m {input_buffer}")
             sys.stdout.flush()
             
             # Non-blocking stdin check
@@ -363,23 +531,38 @@ def run_terminal_app(initial_greeting=False):
             if rlist:
                 ch = sys.stdin.read(1)
                 if ch in ("\n", "\r"):
-                    cmd = input_buffer.strip().lower()
+                    cmd = input_buffer.strip()
                     input_buffer = ""
-                    if cmd in ("q", "quit", "exit"):
+                    lower_cmd = cmd.lower()
+                    if lower_cmd in ("q", "quit", "exit"):
                         running = False
                         break
-                    elif "hello" in cmd or "hi" in cmd or "hey" in cmd:
+                    elif lower_cmd.startswith("/theme"):
+                        if "violet" in lower_cmd or "purple" in lower_cmd:
+                            current_theme = "Midnight Violet"
+                        elif "sunset" in lower_cmd or "gold" in lower_cmd:
+                            current_theme = "Golden Sunset"
+                        else:
+                            current_theme = "Princess Pink"
+                        palette = get_theme_palette(current_theme)
                         speech_active = True
-                        speech_text = "H E L L O !"
-                        speech_end_time = now + 4.5
-                    elif "love" in cmd or "cute" in cmd or "pretty" in cmd:
+                        speech_text = f"Theme: {current_theme}"
+                        speech_end_time = now + 3.0
+                    elif lower_cmd in ("/chime", "/sound", "/bell"):
+                        enable_sound = not enable_sound
                         speech_active = True
-                        speech_text = "THANK YOU! ♥"
-                        speech_end_time = now + 4.5
+                        speech_text = f"Chime: {'ON' if enable_sound else 'OFF'}"
+                        speech_end_time = now + 3.0
                     elif cmd:
+                        if engine:
+                            res = engine.process_message(cmd)
+                            speech_text = res["reply_text"]
+                        else:
+                            speech_text = "HELLO THERE! 💖"
                         speech_active = True
-                        speech_text = "HELLO THERE! 💖"
-                        speech_end_time = now + 4.5
+                        speech_end_time = now + 5.0
+                        if enable_sound:
+                            print("\a", end="", flush=True)
                 elif ch in ("\x7f", "\x08"):  # Backspace
                     input_buffer = input_buffer[:-1]
                 elif ch == "\x1b":  # Escape
@@ -400,7 +583,7 @@ def run_terminal_app(initial_greeting=False):
 # ---------------------------------------------------------------------------
 
 class PixelGirlPopup:
-    def __init__(self, pixel_size=10, initial_greeting=False):
+    def __init__(self, pixel_size=10, initial_greeting=False, theme="Princess Pink", enable_sound=True):
         import tkinter as tk
         self.tk = tk
         
@@ -418,6 +601,17 @@ class PixelGirlPopup:
         self.canvas_h = (self.num_rows * self.pixel_size) + self.cloud_height + 20
         self.girl_y_offset = self.cloud_height + 10
         
+        # Theme & Audio
+        self.current_theme = theme
+        self.current_palette = get_theme_palette(self.current_theme)
+        self.sound_enabled = enable_sound
+        self.theme_buttons = {}
+
+        # Dialogue Engine & State
+        self.dialogue_engine = DialogueEngine() if DialogueEngine else None
+        self.friendship_level = self.dialogue_engine.get_friendship_level() if self.dialogue_engine else 0
+        self.greeting_count = self.dialogue_engine.get_greeting_count() if self.dialogue_engine else 0
+
         # Animation State
         self.frame_count = 0
         self.start_time = time.time()
@@ -434,12 +628,61 @@ class PixelGirlPopup:
         # Start animation loop (~30 fps)
         self.root.after(30, self.update_animation)
         
+    def set_theme(self, theme_name):
+        """Switches the current outfit/color theme and updates canvas pixels."""
+        if theme_name not in THEMES:
+            return
+        self.current_theme = theme_name
+        self.current_palette = get_theme_palette(theme_name)
+        
+        # Update theme button highlights
+        for name, btn in self.theme_buttons.items():
+            if name == theme_name:
+                btn.config(bg="#d81b60", fg="#ffffff")
+            else:
+                btn.config(bg="#2c1e38", fg="#c0adc8")
+                
+        # Force re-render of all cells with new colors
+        self.refresh_all_cells()
+
+    def toggle_sound(self):
+        """Toggles audio chime / bell option."""
+        self.sound_enabled = not self.sound_enabled
+        if hasattr(self, "sound_btn") and self.sound_btn:
+            if self.sound_enabled:
+                self.sound_btn.config(text="🔔 Chime: ON", fg="#ffd166", bg="#2c1e38")
+                self.play_chime()
+            else:
+                self.sound_btn.config(text="🔕 Chime: OFF", fg="#8c7d9a", bg="#1e1828")
+
+    def play_chime(self):
+        """Emits an audio chime/bell when sound is enabled."""
+        if not self.sound_enabled:
+            return
+        try:
+            self.root.bell()
+        except Exception:
+            try:
+                print("\a", end="", flush=True)
+            except Exception:
+                pass
+
+    def update_friendship_display(self, level=None):
+        """Updates the friendship level indicator and badge."""
+        if level is not None:
+            self.friendship_level = level
+        rank_title, badge = get_friendship_rank(self.friendship_level)
+        if hasattr(self, "friendship_label") and self.friendship_label:
+            self.friendship_label.config(
+                text=f"♥ Level {self.friendship_level} • {rank_title} {badge}"
+            )
+
     def build_ui(self):
         tk = self.tk
         
         # Header title
         header_frame = tk.Frame(self.root, bg="#14111d")
-        header_frame.pack(fill="x", pady=(10, 0))
+        header_frame.pack(fill="x", pady=(8, 0))
         
         title = tk.Label(
             header_frame,
@@ -458,6 +701,74 @@ class PixelGirlPopup:
             bg="#14111d"
         )
         subtitle.pack()
+
+        # Top Bar: Friendship Indicator & Audio Chime Toggle
+        top_bar = tk.Frame(self.root, bg="#191524", padx=12, pady=5)
+        top_bar.pack(fill="x", padx=16, pady=(6, 2))
+
+        rank_title, badge = get_friendship_rank(self.friendship_level)
+        self.friendship_label = tk.Label(
+            top_bar,
+            text=f"♥ Level {self.friendship_level} • {rank_title} {badge}",
+            font=("DejaVu Sans", 9, "bold"),
+            fg="#ff85c0",
+            bg="#191524"
+        )
+        self.friendship_label.pack(side="left")
+
+        self.sound_btn = tk.Button(
+            top_bar,
+            text="🔔 Chime: ON" if self.sound_enabled else "🔕 Chime: OFF",
+            command=self.toggle_sound,
+            font=("DejaVu Sans", 8, "bold"),
+            bg="#2c1e38" if self.sound_enabled else "#1e1828",
+            fg="#ffd166" if self.sound_enabled else "#8c7d9a",
+            activebackground="#ff69b4",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=8,
+            pady=2,
+            cursor="hand2"
+        )
+        self.sound_btn.pack(side="right")
+
+        # Theme Switcher Bar
+        theme_bar = tk.Frame(self.root, bg="#14111d", padx=12, pady=2)
+        theme_bar.pack(fill="x", padx=16, pady=(0, 2))
+
+        theme_lbl = tk.Label(
+            theme_bar,
+            text="👗 Outfit:",
+            font=("DejaVu Sans", 8, "bold"),
+            fg="#8c7d9a",
+            bg="#14111d"
+        )
+        theme_lbl.pack(side="left", padx=(0, 6))
+
+        theme_buttons_data = [
+            ("Princess Pink", "🌸 Pink"),
+            ("Midnight Violet", "🔮 Violet"),
+            ("Golden Sunset", "🌅 Sunset"),
+        ]
+
+        for theme_key, btn_text in theme_buttons_data:
+            is_active = (theme_key == self.current_theme)
+            btn = tk.Button(
+                theme_bar,
+                text=btn_text,
+                command=lambda k=theme_key: self.set_theme(k),
+                font=("DejaVu Sans", 8, "bold"),
+                bg="#d81b60" if is_active else "#2c1e38",
+                fg="#ffffff" if is_active else "#c0adc8",
+                activebackground="#ff4081",
+                activeforeground="#ffffff",
+                relief="flat",
+                padx=8,
+                pady=2,
+                cursor="hand2"
+            )
+            btn.pack(side="left", padx=3)
+            self.theme_buttons[theme_key] = btn
         
         # Pixel Art Canvas
         self.canvas = tk.Canvas(
@@ -467,15 +778,15 @@ class PixelGirlPopup:
             bg="#14111d",
             highlightthickness=0
         )
-        self.canvas.pack(padx=10, pady=5)
+        self.canvas.pack(padx=10, pady=2)
         
         # Interactive Control Panel
-        panel = tk.Frame(self.root, bg="#1a1626", padx=14, pady=10)
-        panel.pack(fill="x", padx=16, pady=(0, 10))
+        panel = tk.Frame(self.root, bg="#1a1626", padx=14, pady=8)
+        panel.pack(fill="x", padx=16, pady=(0, 8))
         
         # Quick action greeting buttons
         btn_frame = tk.Frame(panel, bg="#1a1626")
-        btn_frame.pack(fill="x", pady=(0, 8))
+        btn_frame.pack(fill="x", pady=(0, 6))
         
         btn_style = {
             "bg": "#2c1e38",
@@ -483,35 +794,43 @@ class PixelGirlPopup:
             "activebackground": "#ff69b4",
             "activeforeground": "#ffffff",
             "relief": "flat",
-            "font": ("DejaVu Sans", 9, "bold"),
-            "padx": 10,
-            "pady": 4,
+            "font": ("DejaVu Sans", 8, "bold"),
+            "padx": 8,
+            "pady": 3,
             "cursor": "hand2"
         }
         
         say_hello_btn = tk.Button(
             btn_frame,
-            text="💬 Say 'Hello!'",
-            command=lambda: self.trigger_speech("HELLO! ♥"),
+            text="💬 Hello!",
+            command=lambda: self.handle_user_input("hello"),
             **btn_style
         )
-        say_hello_btn.pack(side="left", padx=4)
+        say_hello_btn.pack(side="left", padx=3)
         
         wave_btn = tk.Button(
             btn_frame,
             text="👋 Wave",
-            command=lambda: self.trigger_speech("HI THERE! ✨"),
+            command=lambda: self.handle_user_input("hi there"),
             **btn_style
         )
-        wave_btn.pack(side="left", padx=4)
+        wave_btn.pack(side="left", padx=3)
         
         love_btn = tk.Button(
             btn_frame,
             text="💖 Love You",
-            command=lambda: self.trigger_speech("AWH, LOVE! ♥"),
+            command=lambda: self.handle_user_input("I love you, so cute!"),
             **btn_style
         )
-        love_btn.pack(side="left", padx=4)
+        love_btn.pack(side="left", padx=3)
+
+        status_btn = tk.Button(
+            btn_frame,
+            text="📊 Friendship",
+            command=lambda: self.handle_user_input("what is our friendship level?"),
+            **btn_style
+        )
+        status_btn.pack(side="left", padx=3)
         
         # Text input row
         input_frame = tk.Frame(panel, bg="#1a1626")
@@ -551,11 +870,11 @@ class PixelGirlPopup:
         # Footer hints
         footer = tk.Label(
             self.root,
-            text="Type 'hello' and hit Enter!  •  Press Esc to close",
+            text="Type a message & hit Enter  •  Change theme above  •  Press Esc to close",
             font=("DejaVu Sans", 8),
             fg="#7c6b90",
             bg="#14111d",
-            pady=6
+            pady=4
         )
         footer.pack()
         
@@ -598,9 +917,10 @@ class PixelGirlPopup:
 
     def render_girl_frame(self, grid_lines):
         """Updates cell fills for characters that changed."""
+        palette = self.current_palette
         for r_idx, line in enumerate(grid_lines):
             for c_idx, char in enumerate(line):
-                color = PALETTE.get(char)
+                color = palette.get(char)
                 hex_col = f"#{color[0]:02x}{color[1]:02x}{color[2]:02x}" if color else ""
                 item = self.cell_items.get((r_idx, c_idx))
                 if item:
@@ -608,33 +928,56 @@ class PixelGirlPopup:
                     if current_fill != hex_col:
                         self.canvas.itemconfig(item, fill=hex_col)
 
-    def trigger_speech(self, text):
-        """Triggers the animated speech cloud reaction."""
-        self.speech_active = True
-        self.speech_text = text
-        self.speech_start_time = time.time()
-        self.speech_scale = 0.05
-        self.expression = "HAPPY"
+    def refresh_all_cells(self):
+        """Forces all canvas cells to update fill with the current palette."""
+        for item in self.cell_items.values():
+            self.canvas.itemconfig(item, fill="")
+
+    def handle_user_input(self, user_text: str):
+        """Processes user input through DialogueEngine and updates UI reactions."""
+        if not user_text:
+            return
+            
+        if self.dialogue_engine:
+            res = self.dialogue_engine.process_message(user_text)
+            reply = res["reply_text"]
+            emotion = res.get("emotion", "NORMAL")
+            friendship = res.get("friendship_level", self.friendship_level)
+            self.update_friendship_display(friendship)
+            self.trigger_speech(reply, emotion=emotion)
+            self.play_chime()
+        else:
+            lower = user_text.lower()
+            if "hello" in lower or "hi" in lower:
+                reply = "HELLO! ♥"
+            elif "love" in lower or "cute" in lower:
+                reply = "AWH, LOVE! ♥"
+            else:
+                reply = "HELLO THERE! 💖"
+            self.trigger_speech(reply, emotion="HAPPY")
+            self.play_chime()
 
     def on_send(self):
         user_text = self.entry_var.get().strip()
         self.entry_var.set("")
-        if not user_text:
-            return
-            
-        lower_txt = user_text.lower()
-        if "hello" in lower_txt or "hi" in lower_txt or "hey" in lower_txt:
-            self.trigger_speech("HELLO! ♥")
-        elif "how are you" in lower_txt:
-            self.trigger_speech("FEELING GREAT! ✨")
-        elif "name" in lower_txt or "who are you" in lower_txt:
-            self.trigger_speech("I'M MIA! 🌸")
-        elif "love" in lower_txt or "cute" in lower_txt or "pretty" in lower_txt:
-            self.trigger_speech("THANK YOU! ♥")
-        elif "bye" in lower_txt:
-            self.trigger_speech("GOODBYE! 👋💖")
+        self.handle_user_input(user_text)
+
+    def trigger_speech(self, text, emotion="HAPPY"):
+        """Triggers the animated speech cloud reaction with emotion expression."""
+        self.speech_active = True
+        self.speech_text = text
+        self.speech_start_time = time.time()
+        self.speech_scale = 0.05
+        
+        # Set expression based on emotion
+        if emotion in ("HAPPY", "LOVE"):
+            self.expression = "HAPPY"
+        elif emotion == "SHY":
+            self.expression = "HALF"
+        elif emotion == "PLAYFUL":
+            self.expression = "BLINK"
         else:
-            self.trigger_speech("HELLO THERE! 💖")
+            self.expression = "OPEN"
 
     def draw_speech_cloud(self, cx, cy, scale, t):
         """Draws the animated fluffy speech cloud and bouncing letters."""
@@ -688,28 +1031,38 @@ class PixelGirlPopup:
         # 4. Animated wave text inside cloud
         if scale > 0.6:
             text = self.speech_text
-            text_len = len(text)
-            spacing = 16 * scale
-            total_w = text_len * spacing
-            start_x = cx - (total_w / 2.0) + (spacing / 2.0)
-            
+            lines = textwrap.wrap(text, width=18) if len(text) > 16 else [text]
             letter_colors = ["#ff007f", "#e91e63", "#d81b60", "#ff4081", "#c2185b", "#9c27b0"]
-            font_size = max(8, int(15 * scale))
             
-            for idx, ch in enumerate(text):
-                # Letter wave bounce
-                wave_offset = math.sin(t * 6.0 + idx * 0.7) * (4.0 * scale)
-                lx = start_x + (idx * spacing)
-                ly = cy + wave_offset + (2 * scale)
-                col = letter_colors[(int(t * 4) + idx) % len(letter_colors)]
-                
-                self.canvas.create_text(
-                    lx, ly,
-                    text=ch,
-                    font=("DejaVu Sans", font_size, "bold"),
-                    fill=col,
-                    tags="cloud"
-                )
+            line_height = int(18 * scale)
+            start_y = cy - ((len(lines) - 1) * line_height / 2.0)
+            
+            for line_idx, line in enumerate(lines):
+                if len(lines) == 1 and len(line) <= 14:
+                    spacing = 15 * scale
+                    total_w = len(line) * spacing
+                    start_x = cx - (total_w / 2.0) + (spacing / 2.0)
+                    font_size = max(8, int(15 * scale))
+                    for idx, ch in enumerate(line):
+                        wave_offset = math.sin(t * 6.0 + idx * 0.7) * (4.0 * scale)
+                        lx = start_x + (idx * spacing)
+                        ly = start_y + wave_offset + (2 * scale)
+                        col = letter_colors[(int(t * 4) + idx) % len(letter_colors)]
+                        self.canvas.create_text(
+                            lx, ly, text=ch,
+                            font=("DejaVu Sans", font_size, "bold"),
+                            fill=col, tags="cloud"
+                        )
+                else:
+                    font_size = max(8, int(12 * scale))
+                    bounce_offset = math.sin(t * 4.0 + line_idx) * (2.0 * scale)
+                    col = letter_colors[(int(t * 3) + line_idx) % len(letter_colors)]
+                    self.canvas.create_text(
+                        cx, start_y + (line_idx * line_height) + bounce_offset,
+                        text=line,
+                        font=("DejaVu Sans", font_size, "bold"),
+                        fill=col, tags="cloud"
+                    )
                 
             # Floating sparkles around cloud
             sparkle_angles = [0.2, 1.8, 3.4, 4.9]
@@ -754,6 +1107,10 @@ class PixelGirlPopup:
         # 2. Girl face expression state machine
         if self.expression == "HAPPY":
             face = "HAPPY"
+        elif self.expression == "HALF":
+            face = "HALF"
+        elif self.expression == "BLINK":
+            face = "BLINK"
         else:
             # Idle blinking (blink every 3.5 seconds)
             cycle = self.frame_count % 90
@@ -804,37 +1161,54 @@ def main():
 Usage:
   python3 pixel_girl.py           Launch desktop animated GUI popup
   python3 pixel_girl.py --popup   Launch desktop animated GUI popup
+  python3 pixel_girl.py --theme <name> Launch with theme (Princess Pink, Midnight Violet, Golden Sunset)
   python3 pixel_girl.py --terminal Launch interactive animated terminal mode
   python3 pixel_girl.py --static   Print one-time static terminal ANSI art
   python3 pixel_girl.py --say "hi" Start with greeting cloud active
+  python3 pixel_girl.py --nosound  Disable sound chime
 """)
         return
         
+    theme_name = "Princess Pink"
+    if "--theme" in args:
+        t_idx = args.index("--theme")
+        if t_idx + 1 < len(args):
+            raw_t = args[t_idx + 1].lower()
+            if "violet" in raw_t or "purple" in raw_t:
+                theme_name = "Midnight Violet"
+            elif "sunset" in raw_t or "gold" in raw_t:
+                theme_name = "Golden Sunset"
+            else:
+                theme_name = "Princess Pink"
+
+    sound_enabled = "--nosound" not in args
+
     if "--static" in args:
-        banner = "\n\033[1;38;2;255;105;180m  ✨ ✿ Princess Mia ✿ ✨ \033[0m\n"
+        banner = f"\n\033[1;38;2;255;105;180m  ✨ ✿ Princess Mia ✿ ✨ [{theme_name}]\033[0m\n"
         print(banner)
-        print(render_ansi_grid(BASE_ART))
+        palette = get_theme_palette(theme_name)
+        print(render_ansi_grid(BASE_ART, palette=palette))
         print("\n\033[38;2;255;160;200m     ♥ Pixel Art for Terminal ♥\033[0m\n")
         return
 
     initial_say = ("--say" in args) or any("hello" in a.lower() for a in args)
 
     if "--terminal" in args or "-t" in args or "--cli" in args:
-        run_terminal_app(initial_greeting=initial_say)
+        run_terminal_app(initial_greeting=initial_say, theme_name=theme_name, enable_sound=sound_enabled)
         return
 
     # Check for GUI display
     has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
     if has_display:
         try:
-            app = PixelGirlPopup(pixel_size=10, initial_greeting=initial_say)
+            app = PixelGirlPopup(pixel_size=10, initial_greeting=initial_say, theme=theme_name, enable_sound=sound_enabled)
             app.run()
             return
         except Exception as e:
             print(f"Notice: Could not launch GUI ({e}). Falling back to Terminal mode...\n")
-            run_terminal_app(initial_greeting=initial_say)
+            run_terminal_app(initial_greeting=initial_say, theme_name=theme_name, enable_sound=sound_enabled)
     else:
-        run_terminal_app(initial_greeting=initial_say)
+        run_terminal_app(initial_greeting=initial_say, theme_name=theme_name, enable_sound=sound_enabled)
 
 if __name__ == "__main__":
     main()
