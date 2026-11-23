@@ -1,6 +1,6 @@
 # Agy Team — Multi-Agent Engineering Rules & Protocol
 
-This project is developed by a 4-agent persistent AI engineering team managed by **Agy Team**.
+This project is developed by a 8-agent persistent AI engineering team managed by **Agy Team**.
 Every agent operating in this repository must strictly adhere to these rules.
 
 ---
@@ -13,6 +13,10 @@ Every agent operating in this repository must strictly adhere to these rules.
 | **T2** | `backend` | APIs, Business Logic, Auth & Server Tests | `.worktrees/backend` | `agent/backend` | Read/Write |
 | **T3** | `frontend` | UI/UX, Components, Layouts & State | `.worktrees/frontend` | `agent/frontend` | Read/Write |
 | **T4** | `database` | Schema, Migrations, Optimization & Integrity | `.worktrees/database` | `agent/database` | Read/Write |
+| **T5** | `devops` | Docker, CI/CD, Deployment & Infrastructure | `.worktrees/devops` | `agent/devops` | Read/Write |
+| **T6** | `testing` | Unit, Integration, Regression & Verification | `.worktrees/testing` | `agent/testing` | Read/Write |
+| **T7** | `reviewer` | Independent Diffs, Security & Quality Review | `.worktrees/reviewer` | `agent/reviewer` | **READ-ONLY** (Diff Review & Security Audits) |
+| **T8** | `research` | Technical Investigation, Libraries & Alternatives | `.worktrees/research` | `agent/research` | **READ-ONLY** (Diff Review & Security Audits) |
 
 ---
 

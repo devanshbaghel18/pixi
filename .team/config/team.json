@@ -1,22 +1,35 @@
 {
   "name": "cool",
   "version": "1.0.0",
-  "team_size": 4,
+  "team_size": 8,
   "active_roles": [
     "main",
     "backend",
     "frontend",
-    "database"
+    "database",
+    "devops",
+    "testing",
+    "reviewer",
+    "research"
   ],
   "workers": [
     "backend",
     "frontend",
-    "database"
+    "database",
+    "devops",
+    "testing",
+    "reviewer",
+    "research"
   ],
   "coding_workers": [
     "backend",
     "frontend",
-    "database"
+    "database",
+    "devops",
+    "testing"
   ],
-  "read_only_workers": []
+  "read_only_workers": [
+    "reviewer",
+    "research"
+  ]
 }
