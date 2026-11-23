@@ -58,6 +58,15 @@ except ImportError:
         from .local_llm import LocalLLM, get_local_llm
     except ImportError:
         LocalLLM = None  # type: ignore
+
+try:
+    from sound_synth import SoundType, play_chime
+except ImportError:
+    try:
+        from .sound_synth import SoundType, play_chime
+    except ImportError:
+        SoundType = None  # type: ignore
+        play_chime = None  # type: ignore
         get_local_llm = None  # type: ignore
 
 
@@ -367,6 +376,7 @@ class DialogueEngine:
         user_text: str,
         dt: Optional[datetime] = None,
         persist: bool = True,
+        play_sound: bool = False,
     ) -> Dict[str, Any]:
         """
         Processes an incoming user message:
@@ -375,6 +385,7 @@ class DialogueEngine:
           3. Evaluates time-of-day
           4. Generates contextual reply
           5. Updates database state and logs interaction (if persist=True and db_path set)
+          6. Determines suggested sound effect (GREETING, JUMP, BLUSH, CLICK)
 
         Returns dictionary with complete interaction details:
           {
@@ -385,7 +396,8 @@ class DialogueEngine:
             "time_of_day": str,
             "friendship_level": int,
             "greeting_count": int,
-            "interaction_id": Optional[int]
+            "interaction_id": Optional[int],
+            "suggested_sound": str
           }
         """
         if dt is None:
@@ -465,6 +477,22 @@ class DialogueEngine:
                 db_path=self.db_path,
             )
 
+        # Determine suggested sound effect
+        if is_greet:
+            suggested_sound = "GREETING"
+        elif emotion in (Emotion.LOVE.value, Emotion.SHY.value):
+            suggested_sound = "BLUSH"
+        elif emotion in (Emotion.HAPPY.value, Emotion.PLAYFUL.value) or "!" in user_text:
+            suggested_sound = "JUMP"
+        else:
+            suggested_sound = "CLICK"
+
+        if play_sound and play_chime is not None:
+            try:
+                play_chime(suggested_sound)
+            except Exception:
+                pass
+
         return {
             "user_text": user_text,
             "reply_text": reply,
@@ -480,6 +508,7 @@ class DialogueEngine:
             "method": method,
             "all_emotion_probs": pred.get("all_emotion_probs", {emotion: emotion_conf}),
             "all_intent_probs": pred.get("all_intent_probs", {intent: intent_conf}),
+            "suggested_sound": suggested_sound,
         }
 
     def process_message_async(
