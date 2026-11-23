@@ -10,6 +10,7 @@ Tests:
   - GUI PixelGirlPopup component lifecycle, dialogue engine integration, and reactions
 """
 
+import math
 import os
 import sys
 import unittest
@@ -26,7 +27,11 @@ from pixel_girl import (
     PALETTE_MIDNIGHT_VIOLET,
     PALETTE_PRINCESS_PINK,
     THEMES,
+    ActionState,
+    VALID_ACTIONS,
     PixelGirlPopup,
+    calculate_jump_physics,
+    calculate_twirl_transform,
     format_ml_badge,
     get_aura_properties,
     get_friendship_rank,
@@ -317,6 +322,80 @@ class TestActionSystemAndAnimationOverhaul(unittest.TestCase):
         self.assertEqual(frame[44].strip(), "")
         self.assertEqual(frame[45].strip(), "")
 
+    def test_action_state_constants_and_valid_actions(self):
+        """ActionState must define IDLE, WAVING, JUMPING, BLUSHING, and CELEBRATING."""
+        self.assertEqual(ActionState.IDLE, "IDLE")
+        self.assertEqual(ActionState.WAVING, "WAVING")
+        self.assertEqual(ActionState.JUMPING, "JUMPING")
+        self.assertEqual(ActionState.BLUSHING, "BLUSHING")
+        self.assertEqual(ActionState.CELEBRATING, "CELEBRATING")
+
+        expected = ("IDLE", "WAVING", "JUMPING", "BLUSHING", "CELEBRATING")
+        for state in expected:
+            self.assertIn(state, VALID_ACTIONS)
+
+    def test_calculate_jump_physics(self):
+        """calculate_jump_physics computes squash, parabolic trajectory, apex, and landing."""
+        # 1. Crouch (p = 0.05)
+        crouch = calculate_jump_physics(0.05)
+        self.assertEqual(crouch["phase"], "crouch")
+        self.assertLess(crouch["scale_y"], 1.0)
+        self.assertGreater(crouch["scale_x"], 1.0)
+        self.assertGreater(crouch["y_offset"], 0.0)
+
+        # 2. Airborne ascent (p = 0.30)
+        ascent = calculate_jump_physics(0.30)
+        self.assertEqual(ascent["phase"], "ascent")
+        self.assertLess(ascent["y_offset"], 0.0)
+        self.assertGreater(ascent["scale_y"], 1.0)
+
+        # 3. Apex (p = 0.425)
+        apex = calculate_jump_physics(0.425)
+        self.assertEqual(apex["phase"], "apex")
+        self.assertLess(apex["y_offset"], -35.0)
+
+        # 4. Descent (p = 0.60)
+        descent = calculate_jump_physics(0.60)
+        self.assertEqual(descent["phase"], "descent")
+        self.assertLess(descent["y_offset"], 0.0)
+
+        # 5. Landing impact (p = 0.78)
+        land = calculate_jump_physics(0.78)
+        self.assertEqual(land["phase"], "land")
+        self.assertLess(land["scale_y"], 1.0)
+        self.assertGreater(land["scale_x"], 1.0)
+
+        # 6. Recovery (p = 0.95)
+        recovery = calculate_jump_physics(0.95)
+        self.assertEqual(recovery["phase"], "recovery")
+
+    def test_calculate_twirl_transform(self):
+        """calculate_twirl_transform computes continuous spin angle, scale, and phases."""
+        for p in [0.0, 0.25, 0.5, 0.75, 1.0]:
+            twirl = calculate_twirl_transform(p)
+            self.assertIn("angle", twirl)
+            self.assertIn("cos_angle", twirl)
+            self.assertIn("sin_angle", twirl)
+            self.assertIn("scale_x", twirl)
+            self.assertIn("twirl_phase", twirl)
+            self.assertIn("skirt_flare", twirl)
+            self.assertTrue(0.0 <= twirl["scale_x"] <= 1.05)
+            self.assertIn(twirl["twirl_phase"], (0, 1, 2, 3))
+
+    def test_build_frame_wave_frame_numeric_parameter(self):
+        """build_frame accepts wave_frame=1, 2, 3 directly to override arm rows."""
+        for wf in (1, 2, 3):
+            frame = build_frame(face_type="HAPPY", wave_frame=wf)
+            self.assertEqual(len(frame), 47)
+            self.assertIn("sSSs", frame[14])
+
+    def test_build_frame_blush_face(self):
+        """build_frame with face_type='BLUSH' includes blushing heart marks and rosy cheek rows."""
+        frame = build_frame(face_type="BLUSH")
+        self.assertEqual(len(frame), 47)
+        face_slice = "\n".join(frame[12:18])
+        self.assertIn("BBBBB", face_slice)
+
     def test_gui_action_state_machine_and_particles(self):
         """Tests trigger_action transitions, duration, particle spawning, and keyword triggers."""
         import tkinter as tk
@@ -369,6 +448,59 @@ class TestActionSystemAndAnimationOverhaul(unittest.TestCase):
 
             app.handle_user_input("Let us celebrate this win!")
             self.assertEqual(app.action_state, "CELEBRATING")
+        finally:
+            if app and app.root:
+                app.root.destroy()
+
+    def test_thinking_bubble_and_quick_action_buttons(self):
+        """Tests thinking bubble lifecycle, quick action button handles, and draw_particles."""
+        import tkinter as tk
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            root.destroy()
+        except Exception:
+            self.skipTest("Tkinter display not available")
+
+        app = PixelGirlPopup(pixel_size=4, initial_greeting=False, enable_sound=False)
+        app.root.withdraw()
+        try:
+            # 1. Quick action button attributes and dictionary
+            self.assertIsNotNone(app.btn_wave)
+            self.assertIsNotNone(app.btn_jump)
+            self.assertIsNotNone(app.btn_blush)
+            self.assertIsNotNone(app.btn_twirl)
+            self.assertIn(ActionState.WAVING, app.action_buttons)
+            self.assertIn(ActionState.JUMPING, app.action_buttons)
+            self.assertIn(ActionState.BLUSHING, app.action_buttons)
+            self.assertIn(ActionState.CELEBRATING, app.action_buttons)
+
+            # 2. Thinking speech bubble show/hide lifecycle
+            self.assertFalse(app.is_thinking)
+            app.show_thinking("Contemplating...")
+            self.assertTrue(app.is_thinking)
+            self.assertEqual(app.thinking_text, "Contemplating...")
+
+            app.draw_thinking_cloud(150, 60, scale=1.0, t=1.0)
+            items = app.canvas.find_withtag("thinking_cloud")
+            self.assertGreater(len(items), 0)
+
+            app.hide_thinking()
+            self.assertFalse(app.is_thinking)
+            items_after = app.canvas.find_withtag("thinking_cloud")
+            self.assertEqual(len(items_after), 0)
+
+            # 3. Action triggering validation
+            self.assertTrue(app.trigger_action(ActionState.WAVING))
+            self.assertEqual(app.action_state, ActionState.WAVING)
+            self.assertFalse(app.trigger_action("NOT_A_VALID_ACTION"))
+
+            # 4. Particles and draw_particles alias
+            app.spawn_particles("JUMP", count=6)
+            self.assertGreater(len(app.action_particles), 0)
+            app.draw_particles()
+            part_items = app.canvas.find_withtag("action_particle")
+            self.assertGreater(len(part_items), 0)
         finally:
             if app and app.root:
                 app.root.destroy()

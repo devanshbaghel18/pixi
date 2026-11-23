@@ -1454,24 +1454,28 @@ class PixelGirlPopup:
         # Always layer aura behind the girl pixel cells
         self.canvas.tag_lower("aura", "girl")
 
-    def trigger_action(self, action_name: str, duration: float = None):
+    def trigger_action(self, action_name: str, duration: float = None) -> bool:
         """
         Triggers an expressive animated action:
         - WAVING: Waves hand cheerfully with bright smile
         - JUMPING: Realistic physics excitement jump with squash/stretch & starburst particles
         - BLUSHING: Flustered rosy cheeks with floating hearts
         - CELEBRATING: Energetic twirling celebration with starbursts and confetti
+        - IDLE: Resets to idle state
         """
-        action = action_name.upper()
+        if not action_name:
+            return False
+        action = str(action_name).upper()
         if action not in ("WAVING", "JUMPING", "BLUSHING", "CELEBRATING", "IDLE"):
-            action = "WAVING"
+            return False
 
         self.action_state = action
         self.action_start_time = time.time()
+        self.jump_burst_spawned = False
 
         default_durations = {
             "WAVING": 2.2,
-            "JUMPING": 1.1,
+            "JUMPING": 1.2,
             "BLUSHING": 2.6,
             "CELEBRATING": 2.5,
             "IDLE": 0.0,
@@ -1481,21 +1485,104 @@ class PixelGirlPopup:
         girl_cx = self.canvas_w / 2.0
         girl_cy = self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0)
 
-        if action in ("JUMPING", "CELEBRATING"):
+        if action == "JUMPING":
             self.spawn_particles("STARBURST", count=14, origin=(girl_cx, girl_cy))
             self.play_chime()
+        elif action == "CELEBRATING":
+            self.spawn_particles("CONFETTI", count=16, origin=(girl_cx, girl_cy))
+            self.play_chime()
         elif action == "BLUSHING":
-            self.spawn_particles("HEARTS", count=8, origin=(girl_cx, girl_cy - 20))
+            self.spawn_particles("HEARTS", count=10, origin=(girl_cx, girl_cy - 20))
         elif action == "WAVING":
             self.play_chime()
 
+        return True
+
+    def show_thinking(self, prompt: str = "Thinking..."):
+        """Displays the animated async thinking speech bubble."""
+        self.is_thinking = True
+        self.thinking_text = prompt
+        self.thinking_start_time = time.time()
+        self.speech_active = False
+        if hasattr(self, "canvas") and self.canvas:
+            self.canvas.delete("cloud")
+
+    def hide_thinking(self):
+        """Hides the async thinking speech bubble and clears it from canvas."""
+        self.is_thinking = False
+        if hasattr(self, "canvas") and self.canvas:
+            self.canvas.delete("thinking")
+            self.canvas.delete("thinking_cloud")
+
+    def draw_thinking_cloud(self, cx: float, cy: float, scale: float = 1.0, t: float = 0.0):
+        """Draws the animated thinking cloud with trailing bubbles and pulsing dots."""
+        self.canvas.delete("thinking")
+        self.canvas.delete("thinking_cloud")
+        if not self.is_thinking:
+            return
+
+        puffs = [
+            (-48, 6, 22), (-28, -12, 26), (0, -16, 28),
+            (28, -12, 26), (48, 6, 22), (28, 18, 24),
+            (0, 20, 26), (-28, 16, 24)
+        ]
+        outline_col = "#9d4edd"
+        fill_col = "#201833"
+
+        for dx, dy, r in puffs:
+            x, y = cx + dx * scale, cy + dy * scale
+            r_s = r * scale
+            self.canvas.create_oval(
+                x - r_s - 2, y - r_s - 2, x + r_s + 2, y + r_s + 2,
+                fill=outline_col, outline="", tags=("thinking", "thinking_cloud")
+            )
+
+        # Thought tail trailing bubbles descending toward Mia's head
+        tail_bubbles = [
+            (-18 * scale, 36 * scale, 7 * scale),
+            (-28 * scale, 50 * scale, 5 * scale),
+            (-36 * scale, 62 * scale, 3 * scale),
+        ]
+        for tx, ty, tr in tail_bubbles:
+            bx, by = cx + tx, cy + ty
+            self.canvas.create_oval(
+                bx - tr - 1, by - tr - 1, bx + tr + 1, by + tr + 1,
+                fill=outline_col, outline="", tags=("thinking", "thinking_cloud")
+            )
+            self.canvas.create_oval(
+                bx - tr, by - tr, bx + tr, by + tr,
+                fill=fill_col, outline="", tags=("thinking", "thinking_cloud")
+            )
+
+        for dx, dy, r in puffs:
+            x, y = cx + dx * scale, cy + dy * scale
+            r_s = r * scale
+            self.canvas.create_oval(
+                x - r_s, y - r_s, x + r_s, y + r_s,
+                fill=fill_col, outline="", tags=("thinking", "thinking_cloud")
+            )
+
+        dot_count = (int(t * 3.5) % 4)
+        dots = "." * dot_count
+        prompt_display = self.thinking_text.rstrip(".")
+        display_text = f"✨ {prompt_display}{dots} ✨"
+
+        self.canvas.create_text(
+            cx, cy,
+            text=display_text,
+            font=("DejaVu Sans", max(8, int(11 * scale)), "bold"),
+            fill="#e0c3fc",
+            tags=("thinking", "thinking_cloud")
+        )
+
     def spawn_particles(self, p_type="STARBURST", count=10, origin=None):
-        """Spawns dynamic particles (STARBURST, HEARTS, or CONFETTI)."""
+        """Spawns dynamic particles (STARBURST/JUMP, HEARTS/BLUSH, or CONFETTI/TWIRL)."""
         cx = origin[0] if origin else (self.canvas_w / 2.0)
         cy = origin[1] if origin else (self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0))
+        pt = str(p_type).upper()
 
-        if p_type == "STARBURST":
-            chars = ["✨", "★", "✦", "🌟", "✧"]
+        if pt in ("STARBURST", "JUMP"):
+            chars = ["✨", "★", "✦", "🌟", "✧", "⭐"]
             colors = ["#ffd700", "#ff69b4", "#00f0ff", "#ffffff", "#ff85a2", "#ffd166"]
             for _ in range(count):
                 angle = random.uniform(0, 2 * math.pi)
@@ -1511,7 +1598,7 @@ class PixelGirlPopup:
                     "decay": random.uniform(0.025, 0.045),
                     "type": "STARBURST",
                 })
-        elif p_type == "HEARTS":
+        elif pt in ("HEARTS", "HEART", "BLUSH"):
             chars = ["💖", "♥", "💕", "🌸", "💗"]
             colors = ["#ff3385", "#ff70a6", "#ffb6d9", "#ff99c8", "#ff4d6d"]
             for _ in range(count):
@@ -1526,9 +1613,9 @@ class PixelGirlPopup:
                     "decay": random.uniform(0.015, 0.03),
                     "type": "HEARTS",
                 })
-        elif p_type == "CONFETTI":
-            chars = ["🎉", "✨", "🎀", "⭐", "🌺"]
-            colors = ["#ff007f", "#70d6ff", "#ffd166", "#06d6a0", "#ff70a6"]
+        elif pt in ("CONFETTI", "TWIRL", "CELEBRATION"):
+            chars = ["🎉", "✨", "🎀", "⭐", "🌺", "■", "◆"]
+            colors = ["#ff007f", "#70d6ff", "#ffd166", "#06d6a0", "#ff70a6", "#b388ff"]
             for _ in range(count):
                 self.particles.append({
                     "x": cx + random.uniform(-30, 30),
@@ -1541,10 +1628,22 @@ class PixelGirlPopup:
                     "decay": random.uniform(0.02, 0.035),
                     "type": "CONFETTI",
                 })
+        self.action_particles = self.particles
+
+    def draw_particles(self, dt: float = 0.033):
+        """Helper alias to update and render particles."""
+        t = time.time() - self.start_time
+        self.update_and_draw_particles(t)
+
+    def update_particles(self, dt: float = 0.033):
+        """Helper alias to update and render particles."""
+        t = time.time() - self.start_time
+        self.update_and_draw_particles(t)
 
     def update_and_draw_particles(self, t):
         """Updates physics and renders all active particles."""
         self.canvas.delete("particle")
+        self.canvas.delete("action_particle")
         active = []
         for p in self.particles:
             p["life"] -= p["decay"]
@@ -1571,10 +1670,11 @@ class PixelGirlPopup:
                 text=p["char"],
                 font=("DejaVu Sans", font_size, "bold"),
                 fill=p["color"],
-                tags=("particle",)
+                tags=("particle", "action_particle")
             )
             active.append(p)
         self.particles = active
+        self.action_particles = self.particles
 
     def handle_user_input(self, user_text: str):
         """Processes user input through DialogueEngine and updates UI reactions."""
@@ -1596,35 +1696,39 @@ class PixelGirlPopup:
         elif words & {"celebrate", "party", "hurray", "winner", "congrats", "dance"}:
             self.trigger_action("CELEBRATING", duration=2.5)
 
-        if self.dialogue_engine:
-            res = self.dialogue_engine.process_message(user_text)
-            reply = res["reply_text"]
-            emotion = res.get("emotion", "NORMAL")
-            emo_conf = res.get("emotion_confidence", 0.85)
-            intent = res.get("intent", "CHAT")
-            int_conf = res.get("intent_confidence", 0.85)
-            friendship = res.get("friendship_level", self.friendship_level)
+        self.show_thinking()
+        try:
+            if self.dialogue_engine:
+                res = self.dialogue_engine.process_message(user_text)
+                reply = res["reply_text"]
+                emotion = res.get("emotion", "NORMAL")
+                emo_conf = res.get("emotion_confidence", 0.85)
+                intent = res.get("intent", "CHAT")
+                int_conf = res.get("intent_confidence", 0.85)
+                friendship = res.get("friendship_level", self.friendship_level)
 
-            self.update_friendship_display(friendship)
-            self.update_ml_display(intent, int_conf, emotion, emo_conf)
-            self.trigger_speech(reply, emotion=emotion)
-            self.play_chime()
-        else:
-            if "hello" in lower or "hi" in lower:
-                reply = "HELLO! ♥"
-                intent = "GREETING"
-                emotion = "HAPPY"
-            elif "love" in lower or "cute" in lower:
-                reply = "AWH, LOVE! ♥"
-                intent = "COMPLIMENT"
-                emotion = "LOVE"
+                self.update_friendship_display(friendship)
+                self.update_ml_display(intent, int_conf, emotion, emo_conf)
+                self.trigger_speech(reply, emotion=emotion)
+                self.play_chime()
             else:
-                reply = "HELLO THERE! 💖"
-                intent = "CHAT"
-                emotion = "HAPPY"
-            self.update_ml_display(intent, 0.85, emotion, 0.85)
-            self.trigger_speech(reply, emotion=emotion)
-            self.play_chime()
+                if "hello" in lower or "hi" in lower:
+                    reply = "HELLO! ♥"
+                    intent = "GREETING"
+                    emotion = "HAPPY"
+                elif "love" in lower or "cute" in lower:
+                    reply = "AWH, LOVE! ♥"
+                    intent = "COMPLIMENT"
+                    emotion = "LOVE"
+                else:
+                    reply = "HELLO THERE! 💖"
+                    intent = "CHAT"
+                    emotion = "HAPPY"
+                self.update_ml_display(intent, 0.85, emotion, 0.85)
+                self.trigger_speech(reply, emotion=emotion)
+                self.play_chime()
+        finally:
+            self.hide_thinking()
 
     def on_send(self):
         user_text = self.entry_var.get().strip()
@@ -1791,25 +1895,18 @@ class PixelGirlPopup:
                     arm_pose = [WAVE_ARM_1, WAVE_ARM_2, WAVE_ARM_3][wave_step]
                     self.action_y_shift = 0.0
                 elif self.action_state == "JUMPING":
-                    # Excitement jump: crouch (0-15%), airborne leap (15-85%), landing squash (85-100%)
-                    if progress < 0.15:
-                        self.action_y_shift = 3.0  # wind-up crouch
-                        action_face = "HAPPY"
-                        jump_legs = False
-                    elif progress < 0.85:
-                        air_prog = (progress - 0.15) / 0.70
-                        # Parabolic jump arc reaching -28px height
-                        self.action_y_shift = -28.0 * math.sin(math.pi * air_prog)
-                        action_face = "EXCITED"
+                    phys = calculate_jump_physics(progress)
+                    self.action_y_shift = phys["y_offset"]
+                    action_face = "EXCITED"
+                    if phys["phase"] in ("ascent", "apex", "descent"):
                         jump_legs = True
-                        if int(action_elapsed * 15) % 4 == 0:
-                            girl_cx = self.canvas_w / 2.0
-                            girl_cy = self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0) + self.action_y_shift
-                            self.spawn_particles("STARBURST", count=2, origin=(girl_cx, girl_cy))
                     else:
-                        self.action_y_shift = 2.0  # landing squash
-                        action_face = "HAPPY"
                         jump_legs = False
+                    if phys["phase"] == "apex" and not getattr(self, "jump_burst_spawned", False):
+                        girl_cx = self.canvas_w / 2.0
+                        girl_cy = self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0) + self.action_y_shift
+                        self.spawn_particles("STARBURST", count=12, origin=(girl_cx, girl_cy))
+                        self.jump_burst_spawned = True
                 elif self.action_state == "BLUSHING":
                     action_face = "BLUSH"
                     self.action_y_shift = math.sin(action_elapsed * 4.0) * 1.5
@@ -1818,12 +1915,14 @@ class PixelGirlPopup:
                         girl_cy = self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0)
                         self.spawn_particles("HEARTS", count=1, origin=(girl_cx + random.uniform(-25, 25), girl_cy - 10))
                 elif self.action_state == "CELEBRATING":
-                    action_face = "EXCITED"
-                    hop = -abs(math.sin(action_elapsed * 9.0)) * 16.0
+                    twirl = calculate_twirl_transform(progress)
+                    twirl_phase = twirl["twirl_phase"]
+                    action_face = "EXCITED" if twirl_phase in (0, 2) else "HAPPY"
+                    hop = -abs(math.sin(twirl["angle"])) * 16.0
                     self.action_y_shift = hop
                     jump_legs = (hop < -6.0)
-                    wave_step = int(action_elapsed * 8) % 2
-                    arm_pose = WAVE_ARM_1 if wave_step == 0 else WAVE_ARM_3
+                    wave_step = twirl_phase % 3
+                    arm_pose = [WAVE_ARM_1, WAVE_ARM_2, WAVE_ARM_3][wave_step]
                     if int(action_elapsed * 12) % 3 == 0:
                         girl_cx = self.canvas_w / 2.0
                         girl_cy = self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0)
@@ -1873,7 +1972,14 @@ class PixelGirlPopup:
         girl_cy = self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0) + self.last_girl_shift_y
         self.draw_confidence_aura(girl_cx, girl_cy, t)
         
-        # 8. Render speech cloud if active
+        # 8. Render thinking cloud if active
+        if self.is_thinking:
+            cloud_bob = math.sin(t * 3.5) * 2.5
+            cloud_cx = (self.canvas_w / 2.0) + 10
+            cloud_cy = 58 + cloud_bob
+            self.draw_thinking_cloud(cloud_cx, cloud_cy, 1.0, t)
+
+        # 9. Render speech cloud if active
         if self.speech_active and self.speech_scale > 0.02:
             cloud_bob = math.sin(t * 3.5) * 3.5
             cloud_cx = (self.canvas_w / 2.0) + 10
