@@ -13,6 +13,7 @@ Provides:
 import os
 import random
 import re
+import sqlite3
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -39,6 +40,15 @@ except ImportError:
         log_interaction,
         set_state,
     )
+
+try:
+    from ml_classifier import MLClassifier, get_classifier
+except ImportError:
+    try:
+        from .ml_classifier import MLClassifier, get_classifier
+    except ImportError:
+        MLClassifier = None  # type: ignore
+        get_classifier = None  # type: ignore
 
 
 class Emotion(str, Enum):
@@ -217,10 +227,18 @@ class DialogueEngine:
     friendship level adaptation, and persistence via companion_db.
     """
 
-    def __init__(self, db_path: Optional[str] = DEFAULT_DB_PATH):
+    def __init__(self, db_path: Optional[str] = DEFAULT_DB_PATH, classifier: Optional[Any] = None):
         self.db_path = db_path
         if self.db_path:
-            init_db(self.db_path)
+            conn = init_db(self.db_path)
+            if not isinstance(self.db_path, sqlite3.Connection):
+                conn.close()
+        if classifier is not None:
+            self.classifier = classifier
+        elif get_classifier is not None:
+            self.classifier = get_classifier()
+        else:
+            self.classifier = None
 
     def get_friendship_level(self) -> int:
         """Retrieves the current friendship level from the database."""
@@ -348,8 +366,38 @@ class DialogueEngine:
         if dt is None:
             dt = datetime.now()
 
-        emotion = classify_emotion(user_text)
-        is_greet = is_greeting(user_text)
+        pred: Dict[str, Any] = {}
+        if self.classifier:
+            try:
+                pred = self.classifier.predict(user_text)
+            except Exception:
+                pred = {}
+
+        reg_emotion = classify_emotion(user_text)
+        reg_is_greet = is_greeting(user_text)
+
+        ml_emotion = pred.get("emotion")
+        ml_emo_conf = pred.get("emotion_confidence", 0.0)
+        ml_intent = pred.get("intent")
+        ml_int_conf = pred.get("intent_confidence", 0.0)
+        method = pred.get("method", "heuristic")
+
+        # Determine emotion: ML if confident/trained, regex fallback/corroboration
+        if ml_emotion and ml_emotion != Emotion.NORMAL.value:
+            emotion = ml_emotion
+            emotion_conf = ml_emo_conf
+        elif reg_emotion != Emotion.NORMAL.value:
+            emotion = reg_emotion
+            emotion_conf = ml_emo_conf if ml_emotion == reg_emotion else 0.85
+        else:
+            emotion = ml_emotion or Emotion.NORMAL.value
+            emotion_conf = ml_emo_conf if ml_emotion else 1.0
+
+        # Determine greeting / intent
+        is_greet = reg_is_greet or (ml_intent == "GREETING")
+        intent = ml_intent or ("GREETING" if is_greet else "CHAT")
+        intent_conf = ml_int_conf if ml_intent else (0.95 if is_greet else 0.70)
+
         tod = get_time_of_day(dt)
 
         current_friendship = self.get_friendship_level() if persist and self.db_path else 0
@@ -386,11 +434,17 @@ class DialogueEngine:
             "user_text": user_text,
             "reply_text": reply,
             "emotion": emotion,
+            "emotion_confidence": round(float(emotion_conf), 4),
+            "intent": intent,
+            "intent_confidence": round(float(intent_conf), 4),
             "is_greeting": is_greet,
             "time_of_day": tod,
             "friendship_level": new_friendship,
             "greeting_count": new_greetings,
             "interaction_id": interaction_id,
+            "method": method,
+            "all_emotion_probs": pred.get("all_emotion_probs", {emotion: emotion_conf}),
+            "all_intent_probs": pred.get("all_intent_probs", {intent: intent_conf}),
         }
 
 
