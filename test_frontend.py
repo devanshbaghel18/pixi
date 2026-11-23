@@ -11,7 +11,14 @@ Tests:
 """
 
 import os
+import sys
 import unittest
+
+# Ensure the worktree's own modules take precedence over parent directories
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+if _current_dir not in sys.path:
+    sys.path.insert(0, _current_dir)
+
 from pixel_girl import (
     BASE_ART,
     PALETTE,
@@ -25,6 +32,14 @@ from pixel_girl import (
     get_friendship_rank,
     get_theme_palette,
     render_ansi_grid,
+    build_frame,
+    FACE_BLUSH,
+    FACE_EXCITED,
+    FACE_HAPPY,
+    WAVE_ARM_1,
+    WAVE_ARM_2,
+    WAVE_ARM_3,
+    JUMP_LEGS_OVERRIDE,
 )
 
 
@@ -268,6 +283,95 @@ class TestMLBadgeAndAuraCalculations(unittest.TestCase):
         self.assertEqual(low["tier"], "low")
         self.assertEqual(low["color"], "#b388ff")
         self.assertIn("Soft Lavender", low["title"])
+
+
+class TestActionSystemAndAnimationOverhaul(unittest.TestCase):
+    """Tests action state machine, frame construction with arm/leg overrides, and particle physics."""
+
+    def test_build_frame_dimensions(self):
+        """Every built frame must maintain exact 47 rows × 40 columns across all facial and body states."""
+        faces = ["OPEN", "BLINK", "HALF", "HAPPY", "EXCITED", "BLUSH"]
+        for face in faces:
+            frame = build_frame(face_type=face)
+            self.assertEqual(len(frame), 47, f"Face {face} invalid row count")
+            for r_idx, row in enumerate(frame):
+                self.assertEqual(len(row), 40, f"Face {face} row {r_idx} invalid column count: {len(row)}")
+
+    def test_waving_arm_overrides(self):
+        """Waving arm overrides preserve 40-column width and modify arm rows (14..26)."""
+        for arm_idx, arm_pose in enumerate([WAVE_ARM_1, WAVE_ARM_2, WAVE_ARM_3], 1):
+            frame = build_frame(face_type="HAPPY", arm_pose=arm_pose)
+            self.assertEqual(len(frame), 47)
+            for r_idx, row in enumerate(frame):
+                self.assertEqual(len(row), 40, f"Wave arm {arm_idx} row {r_idx} len != 40")
+            # Row 14 contains raised waving hand patch
+            self.assertIn("sSSs", frame[14])
+
+    def test_jump_legs_override(self):
+        """Jumping legs override tucks legs upward in mid-air (rows 40..46)."""
+        frame = build_frame(face_type="EXCITED", jump_legs=True)
+        self.assertEqual(len(frame), 47)
+        for r_idx, row in enumerate(frame):
+            self.assertEqual(len(row), 40, f"Jump legs row {r_idx} len != 40")
+        # Row 44 and 45 become air space under shoes
+        self.assertEqual(frame[44].strip(), "")
+        self.assertEqual(frame[45].strip(), "")
+
+    def test_gui_action_state_machine_and_particles(self):
+        """Tests trigger_action transitions, duration, particle spawning, and keyword triggers."""
+        import tkinter as tk
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            root.destroy()
+        except Exception:
+            self.skipTest("Tkinter display not available")
+
+        app = PixelGirlPopup(pixel_size=4, initial_greeting=False, enable_sound=False)
+        app.root.withdraw()
+        try:
+            # 1. Test WAVING action
+            app.trigger_action("WAVING")
+            self.assertEqual(app.action_state, "WAVING")
+            self.assertGreater(app.action_duration, 0)
+
+            # 2. Test JUMPING action and starburst particles
+            app.trigger_action("JUMPING")
+            self.assertEqual(app.action_state, "JUMPING")
+            self.assertGreater(len(app.particles), 0)
+            starbursts = [p for p in app.particles if p["type"] == "STARBURST"]
+            self.assertGreater(len(starbursts), 0)
+
+            # 3. Test BLUSHING action and hearts particles
+            app.trigger_action("BLUSHING")
+            self.assertEqual(app.action_state, "BLUSHING")
+            hearts = [p for p in app.particles if p["type"] == "HEARTS"]
+            self.assertGreater(len(hearts), 0)
+
+            # 4. Test CELEBRATING action
+            app.trigger_action("CELEBRATING")
+            self.assertEqual(app.action_state, "CELEBRATING")
+
+            # 5. Test particle physics update and drawing
+            app.update_and_draw_particles(1.0)
+            items = app.canvas.find_withtag("particle")
+            self.assertGreater(len(items), 0)
+
+            # 6. Test keyword-based action triggering in handle_user_input
+            app.handle_user_input("OMG that was crazy!")
+            self.assertEqual(app.action_state, "JUMPING")
+
+            app.handle_user_input("Wave to everyone!")
+            self.assertEqual(app.action_state, "WAVING")
+
+            app.handle_user_input("You are so sweet and I love you!")
+            self.assertEqual(app.action_state, "BLUSHING")
+
+            app.handle_user_input("Let us celebrate this win!")
+            self.assertEqual(app.action_state, "CELEBRATING")
+        finally:
+            if app and app.root:
+                app.root.destroy()
 
 
 if __name__ == "__main__":

@@ -16,6 +16,8 @@ import math
 import select
 import threading
 import textwrap
+import random
+import re
 
 try:
     from dialogue_engine import (
@@ -415,11 +417,181 @@ FACE_BLINK = [
 FACE_HAPPY = [
     "        HhLLhHsSssEESSSSEEssSHhLh       ",
     "        HhLLhHsEEEEsSSSsEEEEsHhLh       ",
-    "   ~    HhLLhHsSssssSSSSssssSHhLLh  +    ",
+    "   ~    HhLLhHsSsssSSSSssssSHhLLh  +    ",
     "        HHhhHObBBBBsSSsBBBBbOHhh        ",
     "         HHhHOssSSSSSSSSssOHhHH         ",
     "          HHHHOSsSmmmmSssSOHHHH         ",
 ]
+
+# Excited anime star eyes when jumping or crazy excitement
+FACE_EXCITED = [
+    "        HhLLhHsSEE*ESSSSE*EESHhLh       ",
+    "        HhLLhHSE*F*ESSSSE*F*SHhLh       ",
+    "   *    HhLLhHSE*EESSSSEE*ESHhLLh  *    ",
+    "        HHhhHObBBBBsSSsBBBBbOHhh        ",
+    "         HHhHOssSmmmmmmSssOHhHH         ",
+    "          HHHHOSsSmmmmmmSsSOHHHH        ",
+]
+
+# Flustered deep rosy blush when romantic or shy
+FACE_BLUSH = [
+    "        HhLLhHssEEssSSSSssEEsHhLh       ",
+    "        HhLLhHsSEEEsSSSSsEEEsHhLh       ",
+    "   v    HhLLhHssSssssSSssssSHhLLh  v    ",
+    "        HHhhHOBBBBBsBBsBBBBBHhhhh       ",
+    "         HHhHOBBBBBsBBsBBBBBHhHH        ",
+    "          HHHHOSssSmmSssSOHHHH          ",
+]
+
+# Hand waving arm poses (Overrides rows 14..26, cols 27..40)
+WAVE_ARM_1 = {
+    14: (27, "     sSSs  * "),
+    15: (27, "    sSSSSO   "),
+    16: (27, "   dPPXPd    "),
+    17: (27, "  dPPXPd     "),
+    18: (27, " dPPPw       "),
+    19: (27, "wWddP        "),
+    20: (27, "wPaAAa       "),
+    21: (27, "dPPPwP       "),
+    22: (27, "dPPXPd       "),
+    23: (27, "DPPXXP       "),
+    24: (27, "DPPXXS       "),
+    25: (27, "HPXSSg       "),
+    26: (27, "HSsOGG       "),
+}
+
+WAVE_ARM_2 = {
+    14: (27, "   sSSs   *  "),
+    15: (27, "   sSSSSO    "),
+    16: (27, "   dPPXPd    "),
+    17: (27, "  dPPXPd     "),
+    18: (27, " dPPPw       "),
+    19: (27, "wWddP        "),
+    20: (27, "wPaAAa       "),
+    21: (27, "dPPPwP       "),
+    22: (27, "dPPXPd       "),
+    23: (27, "DPPXXP       "),
+    24: (27, "DPPXXS       "),
+    25: (27, "HPXSSg       "),
+    26: (27, "HSsOGG       "),
+}
+
+WAVE_ARM_3 = {
+    14: (27, "       sSSs *"),
+    15: (27, "      sSSSSO "),
+    16: (27, "    dPPXPd   "),
+    17: (27, "   dPPXPd    "),
+    18: (27, " dPPPw       "),
+    19: (27, "wWddP        "),
+    20: (27, "wPaAAa       "),
+    21: (27, "dPPPwP       "),
+    22: (27, "dPPXPd       "),
+    23: (27, "DPPXXP       "),
+    24: (27, "DPPXXS       "),
+    25: (27, "HPXSSg       "),
+    26: (27, "HSsOGG       "),
+}
+
+# Legs tucked up in mid-air during excitement jump (rows 40..46)
+JUMP_LEGS_OVERRIDE = {
+    40: "              OwkwO  OwkwO              ",
+    41: "             uUKKuO  uUKKuO      ~      ",
+    42: "             uUUUUu  uUUUUu             ",
+    43: "             MMMMMM  MMMMMM             ",
+    44: "                                        ",
+    45: "                                        ",
+    46: "           ......      ......     *     ",
+}
+
+# ---------------------------------------------------------------------------
+# Action State Machine & Physics Utilities
+# ---------------------------------------------------------------------------
+
+class ActionState:
+    IDLE = "IDLE"
+    WAVING = "WAVING"
+    JUMPING = "JUMPING"
+    BLUSHING = "BLUSHING"
+    CELEBRATING = "CELEBRATING"
+
+VALID_ACTIONS = (
+    ActionState.IDLE,
+    ActionState.WAVING,
+    ActionState.JUMPING,
+    ActionState.BLUSHING,
+    ActionState.CELEBRATING,
+)
+
+def calculate_jump_physics(progress: float, max_height: float = 42.0):
+    """
+    Computes physics-based jump trajectory with squash and stretch.
+    progress: float from 0.0 to 1.0.
+    Returns dict: {y_offset, scale_x, scale_y, phase}
+    """
+    p = max(0.0, min(1.0, float(progress)))
+    if p < 0.15:
+        crouch_factor = p / 0.15
+        scale_y = 1.0 - (0.18 * crouch_factor)
+        scale_x = 1.0 + (0.12 * crouch_factor)
+        y_offset = 6.0 * crouch_factor
+        phase = "crouch"
+    elif p < 0.70:
+        air_p = (p - 0.15) / 0.55
+        arc = math.sin(air_p * math.pi)
+        y_offset = -max_height * arc
+        v = math.cos(air_p * math.pi)
+        stretch = abs(v) * 0.18
+        if v > 0.2:
+            phase = "ascent"
+        elif abs(v) <= 0.2:
+            phase = "apex"
+        else:
+            phase = "descent"
+        scale_y = 1.0 + stretch
+        scale_x = 1.0 - (stretch * 0.5)
+    elif p < 0.85:
+        land_p = (p - 0.70) / 0.15
+        impact_factor = math.sin(land_p * math.pi)
+        scale_y = 1.0 - (0.22 * impact_factor)
+        scale_x = 1.0 + (0.18 * impact_factor)
+        y_offset = 4.0 * impact_factor
+        phase = "land"
+    else:
+        rec_p = (p - 0.85) / 0.15
+        spring = math.cos(rec_p * math.pi * 0.5)
+        scale_y = 1.0 + (0.05 * math.sin(rec_p * math.pi * 2.0) * spring)
+        scale_x = 1.0 - (0.04 * math.sin(rec_p * math.pi * 2.0) * spring)
+        y_offset = 0.0
+        phase = "recovery"
+
+    return {
+        "y_offset": y_offset,
+        "scale_x": scale_x,
+        "scale_y": scale_y,
+        "phase": phase,
+    }
+
+def calculate_twirl_transform(progress: float, num_spins: float = 2.0):
+    """
+    Computes 360-degree twirl transformation and orbit angle.
+    progress: float from 0.0 to 1.0.
+    Returns dict: {angle, cos_angle, sin_angle, scale_x, twirl_phase, skirt_flare}
+    """
+    p = max(0.0, min(1.0, float(progress)))
+    angle = p * 2.0 * math.pi * num_spins
+    cos_val = math.cos(angle)
+    sin_val = math.sin(angle)
+    scale_x = abs(cos_val) * 0.8 + 0.2
+    quadrant = int((angle % (2.0 * math.pi)) / (math.pi / 2.0)) % 4
+    skirt_flare = abs(sin_val) * 8.0
+    return {
+        "angle": angle,
+        "cos_angle": cos_val,
+        "sin_angle": sin_val,
+        "scale_x": scale_x,
+        "twirl_phase": quadrant,
+        "skirt_flare": skirt_flare,
+    }
 
 # Sparkle patterns for idle animation (Rows 0, 1, 9, 26, 41, 46)
 SPARKLE_FRAMES = [
@@ -449,8 +621,8 @@ SPARKLE_FRAMES = [
     },
 ]
 
-def build_frame(face_type="OPEN", sparkle_idx=0):
-    """Assembles a 47-row character grid with the given face and sparkle frame."""
+def build_frame(face_type="OPEN", sparkle_idx=0, wave_frame=0, jump_legs=False, twirl_phase=0, arm_pose=None):
+    """Assembles a 47-row character grid with the given face, body action, and sparkle frame."""
     frame = list(BASE_ART)
     
     # Choose face
@@ -460,12 +632,36 @@ def build_frame(face_type="OPEN", sparkle_idx=0):
         face_rows = FACE_HALF_BLINK
     elif face_type == "HAPPY":
         face_rows = FACE_HAPPY
+    elif face_type == "EXCITED":
+        face_rows = FACE_EXCITED
+    elif face_type == "BLUSH":
+        face_rows = FACE_BLUSH
     else:
         face_rows = FACE_OPEN
         
     for idx, row in enumerate(face_rows):
         frame[12 + idx] = row
-        
+
+    # Arm pose / Waving arm override
+    wave_layers = {1: WAVE_ARM_1, 2: WAVE_ARM_2, 3: WAVE_ARM_3}
+    if arm_pose:
+        for r_idx, (start_c, seg) in arm_pose.items():
+            if 0 <= r_idx < len(frame):
+                orig = frame[r_idx]
+                frame[r_idx] = orig[:start_c] + seg + orig[start_c + len(seg):]
+    elif wave_frame in wave_layers:
+        wave_map = wave_layers[wave_frame]
+        for r_idx, (start_c, seg) in wave_map.items():
+            if 0 <= r_idx < len(frame):
+                orig = frame[r_idx]
+                frame[r_idx] = orig[:start_c] + seg + orig[start_c + len(seg):]
+
+    # Jump legs override
+    if jump_legs:
+        for r_idx, replacement in JUMP_LEGS_OVERRIDE.items():
+            if 0 <= r_idx < len(frame):
+                frame[r_idx] = replacement
+
     # Apply sparkle frame
     sparkle_map = SPARKLE_FRAMES[sparkle_idx % len(SPARKLE_FRAMES)]
     for row_idx, content in sparkle_map.items():
@@ -693,6 +889,21 @@ class PixelGirlPopup:
         self.speech_scale = 1.0 if initial_greeting else 0.0
         self.expression = "HAPPY" if initial_greeting else "NORMAL"
         self.last_girl_shift_y = 0.0
+
+        # Action State Machine (IDLE, WAVING, JUMPING, BLUSHING, CELEBRATING)
+        self.action_state = ActionState.IDLE
+        self.action_start_time = 0.0
+        self.action_duration = 0.0
+        self.action_y_shift = 0.0
+        self.particles = []
+        self.action_particles = self.particles
+        self.jump_apex_spawned = False
+        self.twirl_particle_timer = 0.0
+
+        # Async Thinking Bubble State
+        self.is_thinking = False
+        self.thinking_text = "Thinking..."
+        self.thinking_start_time = 0.0
 
         # ML Emotion, Intent & Active Learning Feedback State
         self.ml_confidence = 0.85
@@ -939,7 +1150,7 @@ class PixelGirlPopup:
         panel = tk.Frame(self.root, bg="#1a1626", padx=14, pady=8)
         panel.pack(fill="x", padx=16, pady=(0, 8))
         
-        # Quick action greeting buttons
+        # Quick action greeting & physical animation buttons
         btn_frame = tk.Frame(panel, bg="#1a1626")
         btn_frame.pack(fill="x", pady=(0, 6))
         
@@ -950,7 +1161,7 @@ class PixelGirlPopup:
             "activeforeground": "#ffffff",
             "relief": "flat",
             "font": ("DejaVu Sans", 8, "bold"),
-            "padx": 8,
+            "padx": 6,
             "pady": 3,
             "cursor": "hand2"
         }
@@ -961,23 +1172,39 @@ class PixelGirlPopup:
             command=lambda: self.handle_user_input("hello"),
             **btn_style
         )
-        say_hello_btn.pack(side="left", padx=3)
+        say_hello_btn.pack(side="left", padx=2)
         
         wave_btn = tk.Button(
             btn_frame,
             text="👋 Wave",
-            command=lambda: self.handle_user_input("hi there"),
+            command=lambda: (self.trigger_action("WAVING"), self.handle_user_input("Wave hello! 👋")),
             **btn_style
         )
-        wave_btn.pack(side="left", padx=3)
-        
-        love_btn = tk.Button(
+        wave_btn.pack(side="left", padx=2)
+
+        jump_btn = tk.Button(
             btn_frame,
-            text="💖 Love You",
-            command=lambda: self.handle_user_input("I love you, so cute!"),
+            text="🚀 Jump!",
+            command=lambda: (self.trigger_action("JUMPING"), self.handle_user_input("Yay, jump for joy! 🚀")),
             **btn_style
         )
-        love_btn.pack(side="left", padx=3)
+        jump_btn.pack(side="left", padx=2)
+
+        blush_btn = tk.Button(
+            btn_frame,
+            text="💖 Blush",
+            command=lambda: (self.trigger_action("BLUSHING"), self.handle_user_input("You're so cute and sweet! 💕")),
+            **btn_style
+        )
+        blush_btn.pack(side="left", padx=2)
+
+        celeb_btn = tk.Button(
+            btn_frame,
+            text="🎉 Celebrate",
+            command=lambda: (self.trigger_action("CELEBRATING"), self.handle_user_input("Let's celebrate! 🎉")),
+            **btn_style
+        )
+        celeb_btn.pack(side="left", padx=2)
 
         status_btn = tk.Button(
             btn_frame,
@@ -985,7 +1212,30 @@ class PixelGirlPopup:
             command=lambda: self.handle_user_input("what is our friendship level?"),
             **btn_style
         )
-        status_btn.pack(side="left", padx=3)
+        status_btn.pack(side="left", padx=2)
+
+        # Quick action button references
+        self.btn_wave = wave_btn
+        self.btn_jump = jump_btn
+        self.btn_blush = blush_btn
+        self.btn_twirl = celeb_btn
+        self.action_buttons = {
+            ActionState.WAVING: wave_btn,
+            ActionState.JUMPING: jump_btn,
+            ActionState.BLUSHING: blush_btn,
+            ActionState.CELEBRATING: celeb_btn,
+        }
+
+        self.btn_wave = wave_btn
+        self.btn_jump = jump_btn
+        self.btn_blush = blush_btn
+        self.btn_twirl = celeb_btn
+        self.action_buttons = {
+            ActionState.WAVING: wave_btn,
+            ActionState.JUMPING: jump_btn,
+            ActionState.BLUSHING: blush_btn,
+            ActionState.CELEBRATING: celeb_btn,
+        }
         
         # Text input row
         input_frame = tk.Frame(panel, bg="#1a1626")
@@ -1204,6 +1454,128 @@ class PixelGirlPopup:
         # Always layer aura behind the girl pixel cells
         self.canvas.tag_lower("aura", "girl")
 
+    def trigger_action(self, action_name: str, duration: float = None):
+        """
+        Triggers an expressive animated action:
+        - WAVING: Waves hand cheerfully with bright smile
+        - JUMPING: Realistic physics excitement jump with squash/stretch & starburst particles
+        - BLUSHING: Flustered rosy cheeks with floating hearts
+        - CELEBRATING: Energetic twirling celebration with starbursts and confetti
+        """
+        action = action_name.upper()
+        if action not in ("WAVING", "JUMPING", "BLUSHING", "CELEBRATING", "IDLE"):
+            action = "WAVING"
+
+        self.action_state = action
+        self.action_start_time = time.time()
+
+        default_durations = {
+            "WAVING": 2.2,
+            "JUMPING": 1.1,
+            "BLUSHING": 2.6,
+            "CELEBRATING": 2.5,
+            "IDLE": 0.0,
+        }
+        self.action_duration = duration if duration is not None else default_durations.get(action, 2.0)
+
+        girl_cx = self.canvas_w / 2.0
+        girl_cy = self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0)
+
+        if action in ("JUMPING", "CELEBRATING"):
+            self.spawn_particles("STARBURST", count=14, origin=(girl_cx, girl_cy))
+            self.play_chime()
+        elif action == "BLUSHING":
+            self.spawn_particles("HEARTS", count=8, origin=(girl_cx, girl_cy - 20))
+        elif action == "WAVING":
+            self.play_chime()
+
+    def spawn_particles(self, p_type="STARBURST", count=10, origin=None):
+        """Spawns dynamic particles (STARBURST, HEARTS, or CONFETTI)."""
+        cx = origin[0] if origin else (self.canvas_w / 2.0)
+        cy = origin[1] if origin else (self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0))
+
+        if p_type == "STARBURST":
+            chars = ["✨", "★", "✦", "🌟", "✧"]
+            colors = ["#ffd700", "#ff69b4", "#00f0ff", "#ffffff", "#ff85a2", "#ffd166"]
+            for _ in range(count):
+                angle = random.uniform(0, 2 * math.pi)
+                speed = random.uniform(2.5, 7.0)
+                self.particles.append({
+                    "x": cx + math.cos(angle) * 15,
+                    "y": cy + math.sin(angle) * 15,
+                    "vx": math.cos(angle) * speed,
+                    "vy": math.sin(angle) * speed - 1.5,
+                    "char": random.choice(chars),
+                    "color": random.choice(colors),
+                    "life": 1.0,
+                    "decay": random.uniform(0.025, 0.045),
+                    "type": "STARBURST",
+                })
+        elif p_type == "HEARTS":
+            chars = ["💖", "♥", "💕", "🌸", "💗"]
+            colors = ["#ff3385", "#ff70a6", "#ffb6d9", "#ff99c8", "#ff4d6d"]
+            for _ in range(count):
+                self.particles.append({
+                    "x": cx + random.uniform(-40, 40),
+                    "y": cy + random.uniform(-20, 20),
+                    "vx": random.uniform(-1.0, 1.0),
+                    "vy": random.uniform(-2.5, -1.0),
+                    "char": random.choice(chars),
+                    "color": random.choice(colors),
+                    "life": 1.0,
+                    "decay": random.uniform(0.015, 0.03),
+                    "type": "HEARTS",
+                })
+        elif p_type == "CONFETTI":
+            chars = ["🎉", "✨", "🎀", "⭐", "🌺"]
+            colors = ["#ff007f", "#70d6ff", "#ffd166", "#06d6a0", "#ff70a6"]
+            for _ in range(count):
+                self.particles.append({
+                    "x": cx + random.uniform(-30, 30),
+                    "y": cy - 10,
+                    "vx": random.uniform(-3.5, 3.5),
+                    "vy": random.uniform(-6.0, -2.5),
+                    "char": random.choice(chars),
+                    "color": random.choice(colors),
+                    "life": 1.0,
+                    "decay": random.uniform(0.02, 0.035),
+                    "type": "CONFETTI",
+                })
+
+    def update_and_draw_particles(self, t):
+        """Updates physics and renders all active particles."""
+        self.canvas.delete("particle")
+        active = []
+        for p in self.particles:
+            p["life"] -= p["decay"]
+            if p["life"] <= 0:
+                continue
+
+            # Physics movement
+            p["x"] += p["vx"]
+            p["y"] += p["vy"]
+
+            if p["type"] == "STARBURST":
+                p["vx"] *= 0.94
+                p["vy"] += 0.15  # gravity
+            elif p["type"] == "HEARTS":
+                p["vx"] = math.sin(t * 5.0 + p["x"]) * 1.2
+                p["vy"] -= 0.05  # buoyant float upward
+            elif p["type"] == "CONFETTI":
+                p["vy"] += 0.22  # gravity
+                p["vx"] *= 0.97
+
+            font_size = max(7, int(12 * p["life"]))
+            self.canvas.create_text(
+                p["x"], p["y"],
+                text=p["char"],
+                font=("DejaVu Sans", font_size, "bold"),
+                fill=p["color"],
+                tags=("particle",)
+            )
+            active.append(p)
+        self.particles = active
+
     def handle_user_input(self, user_text: str):
         """Processes user input through DialogueEngine and updates UI reactions."""
         if not user_text:
@@ -1211,6 +1583,18 @@ class PixelGirlPopup:
 
         self.last_user_text = user_text
         self.feedback_given = False
+
+        # Determine and trigger expressive physical animation action
+        lower = user_text.lower()
+        words = set(re.findall(r"\b\w+\b", lower))
+        if words & {"jump", "crazy", "omg", "yay", "won", "awesome", "hype", "woohoo"}:
+            self.trigger_action("JUMPING", duration=1.2)
+        elif words & {"wave", "hello", "hi", "hey", "greet", "morning", "evening"}:
+            self.trigger_action("WAVING", duration=2.2)
+        elif words & {"love", "cute", "pretty", "beautiful", "blush", "marry", "sweet", "kiss", "heart"}:
+            self.trigger_action("BLUSHING", duration=2.6)
+        elif words & {"celebrate", "party", "hurray", "winner", "congrats", "dance"}:
+            self.trigger_action("CELEBRATING", duration=2.5)
 
         if self.dialogue_engine:
             res = self.dialogue_engine.process_message(user_text)
@@ -1226,7 +1610,6 @@ class PixelGirlPopup:
             self.trigger_speech(reply, emotion=emotion)
             self.play_chime()
         else:
-            lower = user_text.lower()
             if "hello" in lower or "hi" in lower:
                 reply = "HELLO! ♥"
                 intent = "GREETING"
@@ -1390,13 +1773,74 @@ class PixelGirlPopup:
         else:
             self.speech_scale = 0.0
             
-        # 2. Girl face expression state machine
-        if self.expression == "HAPPY":
-            face = "HAPPY"
-        elif self.expression == "HALF":
-            face = "HALF"
-        elif self.expression == "BLINK":
-            face = "BLINK"
+        # 2. Action state machine (WAVING, JUMPING, BLUSHING, CELEBRATING)
+        arm_pose = None
+        jump_legs = False
+        action_face = None
+
+        if self.action_state != "IDLE":
+            action_elapsed = now - self.action_start_time
+            if action_elapsed >= self.action_duration:
+                self.action_state = "IDLE"
+                self.action_y_shift = 0.0
+            else:
+                progress = action_elapsed / max(0.1, self.action_duration)
+                if self.action_state == "WAVING":
+                    action_face = "HAPPY"
+                    wave_step = int(action_elapsed * 7) % 3
+                    arm_pose = [WAVE_ARM_1, WAVE_ARM_2, WAVE_ARM_3][wave_step]
+                    self.action_y_shift = 0.0
+                elif self.action_state == "JUMPING":
+                    # Excitement jump: crouch (0-15%), airborne leap (15-85%), landing squash (85-100%)
+                    if progress < 0.15:
+                        self.action_y_shift = 3.0  # wind-up crouch
+                        action_face = "HAPPY"
+                        jump_legs = False
+                    elif progress < 0.85:
+                        air_prog = (progress - 0.15) / 0.70
+                        # Parabolic jump arc reaching -28px height
+                        self.action_y_shift = -28.0 * math.sin(math.pi * air_prog)
+                        action_face = "EXCITED"
+                        jump_legs = True
+                        if int(action_elapsed * 15) % 4 == 0:
+                            girl_cx = self.canvas_w / 2.0
+                            girl_cy = self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0) + self.action_y_shift
+                            self.spawn_particles("STARBURST", count=2, origin=(girl_cx, girl_cy))
+                    else:
+                        self.action_y_shift = 2.0  # landing squash
+                        action_face = "HAPPY"
+                        jump_legs = False
+                elif self.action_state == "BLUSHING":
+                    action_face = "BLUSH"
+                    self.action_y_shift = math.sin(action_elapsed * 4.0) * 1.5
+                    if int(action_elapsed * 10) % 4 == 0:
+                        girl_cx = self.canvas_w / 2.0
+                        girl_cy = self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0)
+                        self.spawn_particles("HEARTS", count=1, origin=(girl_cx + random.uniform(-25, 25), girl_cy - 10))
+                elif self.action_state == "CELEBRATING":
+                    action_face = "EXCITED"
+                    hop = -abs(math.sin(action_elapsed * 9.0)) * 16.0
+                    self.action_y_shift = hop
+                    jump_legs = (hop < -6.0)
+                    wave_step = int(action_elapsed * 8) % 2
+                    arm_pose = WAVE_ARM_1 if wave_step == 0 else WAVE_ARM_3
+                    if int(action_elapsed * 12) % 3 == 0:
+                        girl_cx = self.canvas_w / 2.0
+                        girl_cy = self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0)
+                        self.spawn_particles("CONFETTI", count=2, origin=(girl_cx, girl_cy))
+
+        # 3. Girl face expression state machine
+        if action_face:
+            face = action_face
+        elif self.speech_active:
+            if self.expression == "HAPPY":
+                face = "HAPPY"
+            elif self.expression == "HALF":
+                face = "HALF"
+            elif self.expression == "BLINK":
+                face = "BLINK"
+            else:
+                face = "HAPPY"
         else:
             # Idle blinking (blink every 3.5 seconds)
             cycle = self.frame_count % 90
@@ -1409,23 +1853,27 @@ class PixelGirlPopup:
             else:
                 face = "OPEN"
                 
-        # 3. Sparkle frame cycle
+        # 4. Sparkle frame cycle and character frame render
         sparkle_idx = (self.frame_count // 5) % len(SPARKLE_FRAMES)
-        grid = build_frame(face, sparkle_idx)
+        grid = build_frame(face, sparkle_idx, arm_pose=arm_pose, jump_legs=jump_legs)
         self.render_girl_frame(grid)
         
-        # 4. Gentle idle breathing / floating movement
+        # 5. Combined vertical physics movement (Idle breath + action jump/squash)
         breath_y = math.sin(t * 2.2) * 2.0
-        dy = breath_y - self.last_girl_shift_y
+        total_y = breath_y + self.action_y_shift
+        dy = total_y - self.last_girl_shift_y
         self.canvas.move("girl", 0, dy)
-        self.last_girl_shift_y = breath_y
+        self.last_girl_shift_y = total_y
 
-        # 4.5. Render visual confidence aura radiating behind girl
+        # 6. Render active particles (starbursts, hearts, confetti)
+        self.update_and_draw_particles(t)
+
+        # 7. Render visual confidence aura radiating behind girl
         girl_cx = self.canvas_w / 2.0
         girl_cy = self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0) + self.last_girl_shift_y
         self.draw_confidence_aura(girl_cx, girl_cy, t)
         
-        # 5. Render speech cloud if active
+        # 8. Render speech cloud if active
         if self.speech_active and self.speech_scale > 0.02:
             cloud_bob = math.sin(t * 3.5) * 3.5
             cloud_cx = (self.canvas_w / 2.0) + 10
