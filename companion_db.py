@@ -7,7 +7,7 @@ machine learning dataset samples, and model run metrics.
 
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 DEFAULT_DB_PATH = "companion.db"
@@ -33,6 +33,11 @@ __all__ = [
     "save_memory_fact",
     "get_memory_facts",
     "get_conversation_context",
+    "log_study_session",
+    "get_study_sessions",
+    "get_study_stats",
+    "set_scene_setting",
+    "get_scene_setting",
 ]
 
 # ---------------------------------------------------------------------------
@@ -383,6 +388,34 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS study_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject TEXT NOT NULL DEFAULT 'General Study',
+                duration_minutes INTEGER NOT NULL DEFAULT 25,
+                completed BOOLEAN NOT NULL DEFAULT 1,
+                notes TEXT,
+                started_at TEXT NOT NULL,
+                completed_at TEXT
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_study_sessions_started_at
+            ON study_sessions (started_at);
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scene_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            """
             INSERT OR IGNORE INTO companion_state (key, value)
             VALUES ('friendship_level', '0');
             """
@@ -391,6 +424,24 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             """
             INSERT OR IGNORE INTO companion_state (key, value)
             VALUES ('greeting_count', '0');
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO companion_state (key, value)
+            VALUES ('study_streak_days', '0');
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO companion_state (key, value)
+            VALUES ('last_study_date', '');
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO scene_settings (key, value, updated_at)
+            VALUES ('current_scene', 'Sakura Park', CURRENT_TIMESTAMP);
             """
         )
 
@@ -964,6 +1015,195 @@ def get_conversation_context(
             conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Study Sessions, Streaks & Scene Settings
+# ---------------------------------------------------------------------------
+
+def log_study_session(
+    subject: str = "General Study",
+    duration_minutes: int = 25,
+    completed: bool = True,
+    notes: Optional[str] = "",
+    started_at: Optional[str] = None,
+    completed_at: Optional[str] = None,
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> int:
+    """
+    Records a study session. If completed, awards friendship bonus (+3 points)
+    and calculates/advances consecutive daily study streak.
+    """
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        now = datetime.now(timezone.utc)
+        start_str = started_at or now.isoformat()
+        comp_str = completed_at or (now.isoformat() if completed else None)
+        dur = max(1, int(duration_minutes))
+
+        with conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO study_sessions (subject, duration_minutes, completed, notes, started_at, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?);
+                """,
+                (subject.strip() or "General Study", dur, 1 if completed else 0, notes or "", start_str, comp_str),
+            )
+            session_id = cursor.lastrowid
+
+            if completed:
+                # Award friendship points: +3 for standard session, +5 for >=45 mins
+                bonus = 5 if dur >= 45 else 3
+                increment_friendship(bonus, db_path=conn)
+
+                # Update study streak
+                today_str = now.strftime("%Y-%m-%d")
+                last_date = get_state("last_study_date", "", db_path=conn)
+                streak_val = int(get_state("study_streak_days", "0", db_path=conn))
+
+                if last_date == today_str:
+                    # Already completed a session today, maintain streak
+                    pass
+                else:
+                    yesterday_str = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+                    if last_date == yesterday_str:
+                        new_streak = streak_val + 1
+                    else:
+                        new_streak = 1
+                    set_state("study_streak_days", str(new_streak), db_path=conn)
+                    set_state("last_study_date", today_str, db_path=conn)
+
+            return session_id
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_study_sessions(
+    limit: int = 10,
+    completed_only: bool = False,
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> List[Dict[str, Any]]:
+    """Retrieves recent study sessions ordered by started_at DESC."""
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        query = "SELECT id, subject, duration_minutes, completed, notes, started_at, completed_at FROM study_sessions"
+        params: List[Any] = []
+        if completed_only:
+            query += " WHERE completed = 1"
+        query += " ORDER BY started_at DESC LIMIT ?"
+        params.append(limit)
+
+        rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "subject": r["subject"],
+                "duration_minutes": r["duration_minutes"],
+                "completed": bool(r["completed"]),
+                "notes": r["notes"],
+                "started_at": r["started_at"],
+                "completed_at": r["completed_at"],
+            }
+            for r in rows
+        ]
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_study_stats(
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> Dict[str, Any]:
+    """Calculates aggregate study metrics: total sessions, minutes, streak, and subjects breakdown."""
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        row = conn.execute(
+            """
+            SELECT 
+                COUNT(*) AS total_sessions,
+                SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END) AS completed_sessions,
+                SUM(CASE WHEN completed = 1 THEN duration_minutes ELSE 0 END) AS total_minutes,
+                MAX(completed_at) AS last_session_at
+            FROM study_sessions;
+            """
+        ).fetchone()
+
+        subj_rows = conn.execute(
+            """
+            SELECT subject, SUM(duration_minutes) AS total_mins, COUNT(*) AS count
+            FROM study_sessions
+            WHERE completed = 1
+            GROUP BY subject
+            ORDER BY total_mins DESC;
+            """
+        ).fetchall()
+
+        subjects = {r["subject"]: {"total_minutes": r["total_mins"], "sessions": r["count"]} for r in subj_rows}
+
+        streak = int(get_state("study_streak_days", "0", db_path=conn))
+        last_date = get_state("last_study_date", "", db_path=conn)
+
+        return {
+            "total_sessions": row["total_sessions"] or 0,
+            "completed_sessions": row["completed_sessions"] or 0,
+            "total_minutes": row["total_minutes"] or 0,
+            "current_streak_days": streak,
+            "last_study_date": last_date,
+            "last_session_at": row["last_session_at"],
+            "subjects": subjects,
+        }
+    finally:
+        if should_close:
+            conn.close()
+
+
+def set_scene_setting(
+    key: str,
+    value: str,
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> None:
+    """Saves or updates a scene environment preference."""
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        now_str = datetime.now(timezone.utc).isoformat()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO scene_settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at;
+                """,
+                (key.strip(), str(value).strip(), now_str),
+            )
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_scene_setting(
+    key: str,
+    default: str = "Sakura Park",
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> str:
+    """Retrieves a scene preference value, returning default if not set."""
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        row = conn.execute(
+            "SELECT value FROM scene_settings WHERE key = ?;",
+            (key.strip(),),
+        ).fetchone()
+        return row["value"] if row else default
+    finally:
+        if should_close:
+            conn.close()
+
+
 def clear_db(
     db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
 ) -> None:
@@ -980,8 +1220,15 @@ def clear_db(
             conn.execute("DELETE FROM ml_dataset;")
             conn.execute("DELETE FROM model_runs;")
             conn.execute("DELETE FROM companion_memories;")
+            conn.execute("DELETE FROM study_sessions;")
+            conn.execute("DELETE FROM scene_settings;")
             conn.execute(
-                "INSERT INTO companion_state (key, value) VALUES ('friendship_level', '0'), ('greeting_count', '0'), ('ml_dataset_seeded', '1');"
+                "INSERT INTO companion_state (key, value) VALUES "
+                "('friendship_level', '0'), "
+                "('greeting_count', '0'), "
+                "('study_streak_days', '0'), "
+                "('last_study_date', ''), "
+                "('ml_dataset_seeded', '1');"
             )
     finally:
         if should_close:

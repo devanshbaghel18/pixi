@@ -32,6 +32,11 @@ from companion_db import (
     log_model_run,
     save_memory_fact,
     set_state,
+    log_study_session,
+    get_study_sessions,
+    get_study_stats,
+    set_scene_setting,
+    get_scene_setting,
 )
 
 
@@ -437,6 +442,74 @@ class TestCompanionDB(unittest.TestCase):
         init_db(self.db_path)
         save_memory_fact("name", "Mia", category="identity", db_path=self.db_path)
         self.assertEqual(get_memory_facts(category="nonexistent", db_path=self.db_path), [])
+
+
+    def test_study_sessions_logging_and_stats(self):
+        """Tests logging study sessions and calculating aggregate study metrics."""
+        init_db(self.db_path)
+
+        # Log 2 completed study sessions
+        s1 = log_study_session(subject="Math", duration_minutes=30, completed=True, notes="Calculus", db_path=self.db_path)
+        s2 = log_study_session(subject="Physics", duration_minutes=50, completed=True, notes="Quantum mechanics", db_path=self.db_path)
+        # Log 1 incomplete session
+        s3 = log_study_session(subject="History", duration_minutes=15, completed=False, db_path=self.db_path)
+
+        sessions = get_study_sessions(db_path=self.db_path)
+        self.assertEqual(len(sessions), 3)
+
+        completed_sessions = get_study_sessions(completed_only=True, db_path=self.db_path)
+        self.assertEqual(len(completed_sessions), 2)
+
+        stats = get_study_stats(db_path=self.db_path)
+        self.assertEqual(stats["total_sessions"], 3)
+        self.assertEqual(stats["completed_sessions"], 2)
+        self.assertEqual(stats["total_minutes"], 80)
+        self.assertIn("Math", stats["subjects"])
+        self.assertIn("Physics", stats["subjects"])
+        self.assertEqual(stats["subjects"]["Math"]["total_minutes"], 30)
+        self.assertEqual(stats["subjects"]["Physics"]["total_minutes"], 50)
+
+    def test_study_sessions_friendship_bonus(self):
+        """Completed study sessions award friendship points (+3 or +5 for long sessions)."""
+        init_db(self.db_path)
+        self.assertEqual(get_stats(db_path=self.db_path)["friendship_level"], 0)
+
+        # Complete 25-min session -> +3 points
+        log_study_session(subject="CS", duration_minutes=25, completed=True, db_path=self.db_path)
+        self.assertEqual(get_stats(db_path=self.db_path)["friendship_level"], 3)
+
+        # Complete 50-min session -> +5 points
+        log_study_session(subject="CS", duration_minutes=50, completed=True, db_path=self.db_path)
+        self.assertEqual(get_stats(db_path=self.db_path)["friendship_level"], 8)
+
+        # Incomplete session -> no bonus
+        log_study_session(subject="CS", duration_minutes=30, completed=False, db_path=self.db_path)
+        self.assertEqual(get_stats(db_path=self.db_path)["friendship_level"], 8)
+
+    def test_study_streak_progression(self):
+        """Tests study streak tracking across days."""
+        init_db(self.db_path)
+        stats = get_study_stats(db_path=self.db_path)
+        self.assertEqual(stats["current_streak_days"], 0)
+
+        # Log session today
+        log_study_session(subject="Algorithms", duration_minutes=25, completed=True, db_path=self.db_path)
+        stats = get_study_stats(db_path=self.db_path)
+        self.assertEqual(stats["current_streak_days"], 1)
+
+    def test_scene_settings_crud(self):
+        """Tests setting and retrieving environment scene preferences."""
+        init_db(self.db_path)
+        # Default is Sakura Park
+        self.assertEqual(get_scene_setting("current_scene", db_path=self.db_path), "Sakura Park")
+
+        # Update to Midnight Stars
+        set_scene_setting("current_scene", "Midnight Stars", db_path=self.db_path)
+        self.assertEqual(get_scene_setting("current_scene", db_path=self.db_path), "Midnight Stars")
+
+        # Update to Cozy Study
+        set_scene_setting("current_scene", "Cozy Study", db_path=self.db_path)
+        self.assertEqual(get_scene_setting("current_scene", db_path=self.db_path), "Cozy Study")
 
 
 if __name__ == "__main__":
