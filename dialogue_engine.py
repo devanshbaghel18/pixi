@@ -14,6 +14,7 @@ import os
 import random
 import re
 import sqlite3
+import threading
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -49,6 +50,15 @@ except ImportError:
     except ImportError:
         MLClassifier = None  # type: ignore
         get_classifier = None  # type: ignore
+
+try:
+    from local_llm import LocalLLM, get_local_llm
+except ImportError:
+    try:
+        from .local_llm import LocalLLM, get_local_llm
+    except ImportError:
+        LocalLLM = None  # type: ignore
+        get_local_llm = None  # type: ignore
 
 
 class Emotion(str, Enum):
@@ -227,7 +237,14 @@ class DialogueEngine:
     friendship level adaptation, and persistence via companion_db.
     """
 
-    def __init__(self, db_path: Optional[str] = DEFAULT_DB_PATH, classifier: Optional[Any] = None):
+    def __init__(
+        self,
+        db_path: Optional[str] = DEFAULT_DB_PATH,
+        classifier: Optional[Any] = None,
+        use_llm: bool = False,
+        llm: Optional[Any] = None,
+        mock_llm: bool = False,
+    ):
         self.db_path = db_path
         if self.db_path:
             conn = init_db(self.db_path)
@@ -239,6 +256,14 @@ class DialogueEngine:
             self.classifier = get_classifier()
         else:
             self.classifier = None
+
+        self.use_llm = use_llm
+        if llm is not None:
+            self.llm = llm
+        elif use_llm and get_local_llm is not None:
+            self.llm = get_local_llm(mock_mode=mock_llm)
+        else:
+            self.llm = None
 
     def get_friendship_level(self) -> int:
         """Retrieves the current friendship level from the database."""
@@ -403,13 +428,23 @@ class DialogueEngine:
         current_friendship = self.get_friendship_level() if persist and self.db_path else 0
         current_greetings = self.get_greeting_count() if persist and self.db_path else 0
 
-        reply = self._build_contextual_reply(
-            user_text=user_text,
-            emotion=emotion,
-            is_greet=is_greet,
-            dt=dt,
-            friendship_level=current_friendship,
-        )
+        # Attempt neural generation via Local LLM if enabled and available
+        reply = None
+        if self.use_llm and self.llm and self.llm.is_available():
+            try:
+                reply = self.llm.generate_reply(user_text, db_path=self.db_path)
+            except Exception:
+                reply = None
+
+        # Fallback to contextual heuristic/template reply if LLM not used or produced empty
+        if not reply:
+            reply = self._build_contextual_reply(
+                user_text=user_text,
+                emotion=emotion,
+                is_greet=is_greet,
+                dt=dt,
+                friendship_level=current_friendship,
+            )
 
         interaction_id = None
         new_friendship = current_friendship
@@ -446,6 +481,46 @@ class DialogueEngine:
             "all_emotion_probs": pred.get("all_emotion_probs", {emotion: emotion_conf}),
             "all_intent_probs": pred.get("all_intent_probs", {intent: intent_conf}),
         }
+
+    def process_message_async(
+        self,
+        user_text: str,
+        callback: Callable[[Dict[str, Any]], None],
+        dt: Optional[datetime] = None,
+        persist: bool = True,
+    ) -> threading.Thread:
+        """
+        Runs process_message on a background thread and invokes callback(result) on completion.
+        Ensures desktop GUI or CLI never experiences UI latency.
+        """
+        def _worker():
+            try:
+                res = self.process_message(user_text, dt=dt, persist=persist)
+            except Exception as e:
+                res = {
+                    "user_text": user_text,
+                    "reply_text": f"I'm right here with you! 🌸 ({e})",
+                    "emotion": Emotion.NORMAL.value,
+                    "emotion_confidence": 0.5,
+                    "intent": "CHAT",
+                    "intent_confidence": 0.5,
+                    "is_greeting": False,
+                    "time_of_day": "morning",
+                    "friendship_level": self.get_friendship_level(),
+                    "greeting_count": self.get_greeting_count(),
+                    "interaction_id": None,
+                    "method": "fallback",
+                    "all_emotion_probs": {},
+                    "all_intent_probs": {},
+                }
+            try:
+                callback(res)
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        return t
 
 
 def respond(
