@@ -2,7 +2,8 @@
 """
 test_db.py — Comprehensive Unit Tests for companion_db.py
 Tests database initialization, schema integrity, interaction logging,
-friendship and greeting metrics, and summary statistics.
+friendship and greeting metrics, ML dataset seeding, active learning feedback,
+and model run performance metrics.
 """
 
 import os
@@ -13,14 +14,20 @@ from datetime import datetime, timezone
 
 from companion_db import (
     DEFAULT_DB_PATH,
+    SEED_DATASET,
+    add_training_sample,
     clear_db,
+    get_dataset_stats,
+    get_model_runs,
     get_recent_interactions,
     get_state,
     get_stats,
+    get_training_data,
     increment_friendship,
     increment_greeting,
     init_db,
     log_interaction,
+    log_model_run,
     set_state,
 )
 
@@ -40,33 +47,41 @@ class TestCompanionDB(unittest.TestCase):
                 pass
 
     def test_init_db_creates_tables_and_defaults(self):
-        """Verifies schema creation and initial companion_state seeding."""
+        """Verifies schema creation, companion_state, and ml_dataset seeding."""
         conn = init_db(self.db_path)
-        
-        # Verify tables exist
-        tables = [
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        ]
-        self.assertIn("interactions", tables)
-        self.assertIn("companion_state", tables)
+        try:
+            # Verify tables exist
+            tables = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            ]
+            self.assertIn("interactions", tables)
+            self.assertIn("companion_state", tables)
+            self.assertIn("ml_dataset", tables)
+            self.assertIn("model_runs", tables)
 
-        # Verify initial default state values
-        friendship = get_state("friendship_level", db_path=self.db_path)
-        greetings = get_state("greeting_count", db_path=self.db_path)
-        self.assertEqual(friendship, "0")
-        self.assertEqual(greetings, "0")
+            # Verify initial default state values
+            friendship = get_state("friendship_level", db_path=conn)
+            greetings = get_state("greeting_count", db_path=conn)
+            self.assertEqual(friendship, "0")
+            self.assertEqual(greetings, "0")
+        finally:
+            conn.close()
 
     def test_init_db_idempotency(self):
-        """Calling init_db multiple times does not overwrite modified state."""
-        init_db(self.db_path)
+        """Calling init_db multiple times does not overwrite modified state or duplicate seed data."""
+        conn1 = init_db(self.db_path)
+        conn1.close()
         increment_friendship(10, db_path=self.db_path)
+        initial_samples = len(get_training_data(db_path=self.db_path))
         
         # Call init_db again
-        init_db(self.db_path)
+        conn2 = init_db(self.db_path)
+        conn2.close()
         self.assertEqual(get_state("friendship_level", db_path=self.db_path), "10")
+        self.assertEqual(len(get_training_data(db_path=self.db_path)), initial_samples)
 
     def test_log_interaction_and_retrieval(self):
         """Tests logging user interactions with text, reply, and emotion."""
@@ -202,6 +217,7 @@ class TestCompanionDB(unittest.TestCase):
         self.assertEqual(stats["friendship_level"], 0)
         self.assertEqual(stats["greeting_count"], 0)
         self.assertIsNone(get_state("temp_key", db_path=self.db_path))
+        self.assertEqual(len(get_training_data(db_path=self.db_path)), 0)
 
     def test_in_memory_connection(self):
         """Verifies companion_db works with an in-memory SQLite connection."""
@@ -219,6 +235,136 @@ class TestCompanionDB(unittest.TestCase):
         self.assertEqual(stats["total_interactions"], 1)
         self.assertEqual(stats["friendship_level"], 3)
         conn.close()
+
+    # -----------------------------------------------------------------------
+    # ML Dataset & Model Run Tests
+    # -----------------------------------------------------------------------
+
+    def test_ml_dataset_seed_count_and_schema(self):
+        """Verifies ml_dataset table seeds >= 150 diverse labeled dialogue samples."""
+        init_db(self.db_path)
+        samples = get_training_data(db_path=self.db_path)
+        self.assertGreaterEqual(
+            len(samples),
+            150,
+            f"Expected at least 150 seed samples, got {len(samples)}",
+        )
+
+        first = samples[0]
+        self.assertIn("id", first)
+        self.assertIn("text", first)
+        self.assertIn("emotion", first)
+        self.assertIn("intent", first)
+        self.assertIn("split", first)
+        self.assertIn("source", first)
+        self.assertEqual(first["source"], "seed")
+
+    def test_ml_dataset_splits_distribution(self):
+        """Verifies train, val, and test splits are all populated and non-empty."""
+        init_db(self.db_path)
+        train_data = get_training_data(split="train", db_path=self.db_path)
+        val_data = get_training_data(split="val", db_path=self.db_path)
+        test_data = get_training_data(split="test", db_path=self.db_path)
+
+        self.assertGreater(len(train_data), 100)
+        self.assertGreater(len(val_data), 10)
+        self.assertGreater(len(test_data), 10)
+        self.assertEqual(len(train_data) + len(val_data) + len(test_data), len(get_training_data(db_path=self.db_path)))
+
+    def test_ml_dataset_emotion_coverage(self):
+        """Verifies all 5 required emotions are represented in the dataset."""
+        init_db(self.db_path)
+        required_emotions = {"HAPPY", "PLAYFUL", "SHY", "LOVE", "NORMAL"}
+        for emo in required_emotions:
+            samples = get_training_data(emotion=emo, db_path=self.db_path)
+            self.assertGreaterEqual(
+                len(samples),
+                15,
+                f"Emotion '{emo}' has fewer than 15 samples ({len(samples)})",
+            )
+
+    def test_ml_dataset_intent_coverage(self):
+        """Verifies all 5 required intents are represented in the dataset."""
+        init_db(self.db_path)
+        required_intents = {"GREETING", "FAREWELL", "COMPLIMENT", "QUESTION", "CHAT"}
+        for intent in required_intents:
+            samples = get_training_data(intent=intent, db_path=self.db_path)
+            self.assertGreaterEqual(
+                len(samples),
+                15,
+                f"Intent '{intent}' has fewer than 15 samples ({len(samples)})",
+            )
+
+    def test_add_training_sample(self):
+        """Tests adding a new sample via active learning / user feedback."""
+        init_db(self.db_path)
+        initial_count = len(get_training_data(db_path=self.db_path))
+
+        new_id = add_training_sample(
+            text="You did a fantastic job on this module!",
+            emotion="HAPPY",
+            intent="COMPLIMENT",
+            split="train",
+            source="user_feedback",
+            db_path=self.db_path,
+        )
+        self.assertGreater(new_id, 0)
+        self.assertEqual(len(get_training_data(db_path=self.db_path)), initial_count + 1)
+
+        # Check sample details
+        samples = get_training_data(db_path=self.db_path)
+        added = next((s for s in samples if s["id"] == new_id), None)
+        self.assertIsNotNone(added)
+        self.assertEqual(added["text"], "You did a fantastic job on this module!")
+        self.assertEqual(added["emotion"], "HAPPY")
+        self.assertEqual(added["intent"], "COMPLIMENT")
+        self.assertEqual(added["source"], "user_feedback")
+
+    def test_log_model_run_and_retrieval(self):
+        """Tests logging model training performance metrics and retrieving them."""
+        init_db(self.db_path)
+
+        run_id1 = log_model_run(
+            model_name="tfidf_logistic_regression",
+            accuracy=0.915,
+            f1_score=0.912,
+            parameters='{"C": 1.0, "max_iter": 200, "ngram_range": [1, 2]}',
+            notes="Initial baseline classifier run",
+            db_path=self.db_path,
+        )
+        self.assertEqual(run_id1, 1)
+
+        run_id2 = log_model_run(
+            model_name="tfidf_linear_svc",
+            accuracy=0.938,
+            f1_score=0.935,
+            parameters='{"C": 0.5, "loss": "hinge"}',
+            notes="Support vector machine run",
+            db_path=self.db_path,
+        )
+        self.assertEqual(run_id2, 2)
+
+        runs = get_model_runs(limit=5, db_path=self.db_path)
+        self.assertEqual(len(runs), 2)
+        # Most recent run first
+        self.assertEqual(runs[0]["id"], 2)
+        self.assertEqual(runs[0]["model_name"], "tfidf_linear_svc")
+        self.assertAlmostEqual(runs[0]["accuracy"], 0.938)
+        self.assertAlmostEqual(runs[0]["f1_score"], 0.935)
+        self.assertIn("hinge", runs[0]["parameters"])
+
+    def test_get_dataset_stats(self):
+        """Tests aggregate breakdown metrics for ML dataset."""
+        init_db(self.db_path)
+        stats = get_dataset_stats(db_path=self.db_path)
+
+        self.assertGreaterEqual(stats["total_samples"], 150)
+        self.assertIn("train", stats["split_breakdown"])
+        self.assertIn("val", stats["split_breakdown"])
+        self.assertIn("test", stats["split_breakdown"])
+        self.assertIn("HAPPY", stats["emotion_breakdown"])
+        self.assertIn("GREETING", stats["intent_breakdown"])
+        self.assertIn("seed", stats["source_breakdown"])
 
 
 if __name__ == "__main__":
