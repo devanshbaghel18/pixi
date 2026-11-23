@@ -30,6 +30,9 @@ __all__ = [
     "log_model_run",
     "get_model_runs",
     "get_dataset_stats",
+    "save_memory_fact",
+    "get_memory_facts",
+    "get_conversation_context",
 ]
 
 # ---------------------------------------------------------------------------

@@ -64,6 +64,7 @@ class TestCompanionDB(unittest.TestCase):
             self.assertIn("companion_state", tables)
             self.assertIn("ml_dataset", tables)
             self.assertIn("model_runs", tables)
+            self.assertIn("companion_memories", tables)
 
             # Verify initial default state values
             friendship = get_state("friendship_level", db_path=conn)
@@ -412,6 +413,30 @@ class TestCompanionDB(unittest.TestCase):
         self.assertEqual(context[1], {"role": "assistant", "content": "Aww, you make my heart flutter! 💖"})
         self.assertEqual(context[2], {"role": "user", "content": "What are you thinking about?"})
         self.assertEqual(context[3], {"role": "assistant", "content": "I'm thinking about you! 🥰"})
+
+    def test_get_conversation_context_empty_and_default_limit(self):
+        """Tests get_conversation_context on empty DB and with default limit=8."""
+        init_db(self.db_path)
+        # Empty DB returns empty list
+        self.assertEqual(get_conversation_context(db_path=self.db_path), [])
+
+        # Log 10 interactions
+        for i in range(10):
+            log_interaction(f"user query {i}", f"companion reply {i}", emotion="NORMAL", db_path=self.db_path)
+
+        # Default limit=8 should return 8 interactions (16 messages) in chronological order
+        context = get_conversation_context(db_path=self.db_path)
+        self.assertEqual(len(context), 16)
+        self.assertEqual(context[0], {"role": "user", "content": "user query 2"})
+        self.assertEqual(context[1], {"role": "assistant", "content": "companion reply 2"})
+        self.assertEqual(context[-2], {"role": "user", "content": "user query 9"})
+        self.assertEqual(context[-1], {"role": "assistant", "content": "companion reply 9"})
+
+    def test_memory_facts_nonexistent_category(self):
+        """Tests get_memory_facts returns empty list for nonexistent category."""
+        init_db(self.db_path)
+        save_memory_fact("name", "Mia", category="identity", db_path=self.db_path)
+        self.assertEqual(get_memory_facts(category="nonexistent", db_path=self.db_path), [])
 
 
 if __name__ == "__main__":
