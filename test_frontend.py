@@ -27,6 +27,9 @@ from pixel_girl import (
     PALETTE_MIDNIGHT_VIOLET,
     PALETTE_PRINCESS_PINK,
     THEMES,
+    SCENES,
+    DEFAULT_SCENE,
+    get_scene_data,
     ActionState,
     VALID_ACTIONS,
     PixelGirlPopup,
@@ -501,6 +504,69 @@ class TestActionSystemAndAnimationOverhaul(unittest.TestCase):
             app.draw_particles()
             part_items = app.canvas.find_withtag("action_particle")
             self.assertGreater(len(part_items), 0)
+        finally:
+            if app and app.root:
+                app.root.destroy()
+
+
+class TestInteractiveScenesAndEnvironments(unittest.TestCase):
+    """Tests interactive environment scenes, ambient particles, and scene switcher."""
+
+    def test_scenes_dictionary_and_data(self):
+        """Verifies SCENES definitions and get_scene_data fallback."""
+        expected = ["Sakura Park", "Midnight Stars", "Cozy Study"]
+        for scene_name in expected:
+            self.assertIn(scene_name, SCENES)
+            data = get_scene_data(scene_name)
+            self.assertIn("bg_color", data)
+            self.assertIn("title", data)
+            self.assertIn("desc", data)
+
+        fallback = get_scene_data("NonExistentScene")
+        self.assertEqual(fallback, SCENES[DEFAULT_SCENE])
+
+    def test_gui_scene_switching_and_elements(self):
+        """Tests scene switching, canvas background updates, and ambient background element rendering."""
+        import tkinter as tk
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            root.destroy()
+        except Exception:
+            self.skipTest("Tkinter display not available")
+
+        app = PixelGirlPopup(pixel_size=4, initial_greeting=False, enable_sound=False)
+        app.root.withdraw()
+        try:
+            # Initial scene should be Sakura Park
+            self.assertEqual(app.current_scene, "Sakura Park")
+            self.assertGreater(len(app.scene_elements), 0)
+            self.assertEqual(app.scene_elements[0]["type"], "petal")
+
+            # Switch to Midnight Stars
+            app.set_scene("Midnight Stars")
+            self.assertEqual(app.current_scene, "Midnight Stars")
+            self.assertEqual(app.canvas.cget("bg"), SCENES["Midnight Stars"]["bg_color"])
+            self.assertEqual(app.scene_elements[0]["type"], "star")
+
+            # Render scene elements on canvas
+            app.update_and_draw_scene_elements(1.0)
+            bg_items = app.canvas.find_withtag("scene_bg")
+            self.assertGreater(len(bg_items), 0)
+
+            # Switch to Cozy Study
+            app.set_scene("Cozy Study")
+            self.assertEqual(app.current_scene, "Cozy Study")
+            self.assertEqual(app.canvas.cget("bg"), SCENES["Cozy Study"]["bg_color"])
+            self.assertEqual(app.scene_elements[0]["type"], "rain")
+
+            app.update_and_draw_scene_elements(1.0)
+            cozy_items = app.canvas.find_withtag("scene_bg")
+            self.assertGreater(len(cozy_items), 0)
+
+            # Switch back to Sakura Park
+            app.set_scene("Sakura Park")
+            self.assertEqual(app.current_scene, "Sakura Park")
         finally:
             if app and app.root:
                 app.root.destroy()
