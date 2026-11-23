@@ -362,6 +362,24 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS companion_memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                key TEXT NOT NULL UNIQUE,
+                value TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'general',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_companion_memories_category 
+            ON companion_memories (category);
+            """
+        )
+        conn.execute(
+            """
             INSERT OR IGNORE INTO companion_state (key, value)
             VALUES ('friendship_level', '0');
             """
@@ -838,6 +856,111 @@ def get_dataset_stats(
             conn.close()
 
 
+def save_memory_fact(
+    key: str,
+    value: str,
+    category: str = "general",
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> int:
+    """
+    Saves or updates a relationship memory fact (e.g., user nickname, favorite things, milestones).
+    Uses ON CONFLICT(key) DO UPDATE to seamlessly upsert.
+    Returns the memory ID.
+    """
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        now_str = datetime.now(timezone.utc).isoformat()
+        with conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO companion_memories (key, value, category, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    category = excluded.category,
+                    updated_at = excluded.updated_at;
+                """,
+                (key.strip(), value.strip(), category.strip(), now_str, now_str),
+            )
+            return cursor.lastrowid
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_memory_facts(
+    category: Optional[str] = None,
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> List[Dict[str, Any]]:
+    """
+    Retrieves saved relationship memory facts, optionally filtered by category.
+    Ordered by updated_at DESC.
+    """
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        if category:
+            rows = conn.execute(
+                """
+                SELECT id, key, value, category, created_at, updated_at
+                FROM companion_memories
+                WHERE category = ?
+                ORDER BY updated_at DESC;
+                """,
+                (category.strip(),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, key, value, category, created_at, updated_at
+                FROM companion_memories
+                ORDER BY updated_at DESC;
+                """
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_conversation_context(
+    limit: int = 8,
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> List[Dict[str, str]]:
+    """
+    Retrieves the most recent interactions formatted for conversational LLM chat context.
+    Returns list of {'role': 'user' | 'assistant', 'content': str} in chronological order.
+    """
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        rows = conn.execute(
+            """
+            SELECT user_text, reply_text
+            FROM (
+                SELECT id, user_text, reply_text
+                FROM interactions
+                ORDER BY id DESC
+                LIMIT ?
+            ) sub
+            ORDER BY sub.id ASC;
+            """,
+            (limit,),
+        ).fetchall()
+
+        messages: List[Dict[str, str]] = []
+        for r in rows:
+            if r["user_text"]:
+                messages.append({"role": "user", "content": r["user_text"]})
+            if r["reply_text"]:
+                messages.append({"role": "assistant", "content": r["reply_text"]})
+        return messages
+    finally:
+        if should_close:
+            conn.close()
+
+
 def clear_db(
     db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
 ) -> None:
@@ -853,6 +976,7 @@ def clear_db(
             conn.execute("DELETE FROM companion_state;")
             conn.execute("DELETE FROM ml_dataset;")
             conn.execute("DELETE FROM model_runs;")
+            conn.execute("DELETE FROM companion_memories;")
             conn.execute(
                 "INSERT INTO companion_state (key, value) VALUES ('friendship_level', '0'), ('greeting_count', '0'), ('ml_dataset_seeded', '1');"
             )
