@@ -1,6 +1,45 @@
+# Git Ignore Configuration for Pixi
+
+# Multi-Agent Worktrees & Virtual Environments
 .worktrees/
 .venv/
+env/
+venv/
+
+# Python Bytecode & Cache
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Database & Model Artifacts
 *.db
+*.db-journal
 *.pkl
+
+# Audio Caches & Temporary Recordings
+*.mp3
+*.wav
+*.ogg
+*.flac
+/tmp/
+
+# Logs & Runtime Dumps
+*.log
+*.pid
+
+# Packaging & Build Artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE & Editor Artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
