@@ -18,6 +18,7 @@ import threading
 import textwrap
 import random
 import re
+from datetime import datetime
 
 try:
     from dialogue_engine import (
@@ -49,6 +50,8 @@ except ImportError:
 try:
     from companion_db import (
         add_training_sample,
+        clear_conversation_history,
+        get_conversation_context,
         get_scene_setting,
         set_scene_setting,
         log_study_session,
@@ -59,6 +62,8 @@ except ImportError:
     try:
         from .companion_db import (
             add_training_sample,
+            clear_conversation_history,
+            get_conversation_context,
             get_scene_setting,
             set_scene_setting,
             log_study_session,
@@ -67,11 +72,42 @@ except ImportError:
         )
     except Exception:
         add_training_sample = None
+        clear_conversation_history = None
+        get_conversation_context = None
         get_scene_setting = None
         set_scene_setting = None
         log_study_session = None
         get_study_sessions = None
         get_study_stats = None
+
+try:
+    from speech_engine import get_speech_engine, VoiceProfile, resolve_voice_profile, clean_text_for_speech
+except ImportError:
+    try:
+        from .speech_engine import get_speech_engine, VoiceProfile, resolve_voice_profile, clean_text_for_speech
+    except Exception:
+        get_speech_engine = None
+        VoiceProfile = None
+        resolve_voice_profile = None
+        clean_text_for_speech = None
+
+try:
+    from speech_input import get_microphone_capture, MicrophoneState, enumerate_input_devices
+except ImportError:
+    try:
+        from .speech_input import get_microphone_capture, MicrophoneState, enumerate_input_devices
+    except Exception:
+        get_microphone_capture = None
+        MicrophoneState = None
+        enumerate_input_devices = None
+
+try:
+    from tts_engine import get_tts_engine
+except ImportError:
+    try:
+        from .tts_engine import get_tts_engine
+    except Exception:
+        get_tts_engine = None
 
 try:
     from sound_synth import SoundType, play_chime as synth_play_chime
@@ -544,6 +580,16 @@ FACE_KISS = [
     "          HHHHOSsSmmmmSsSOHHHH          ",
 ]
 
+# Sad / hurt / quiet pout face with downturned eyes, tear dot, and closed straight mouth
+FACE_SAD = [
+    "        HhLLhHssEEssSSSSssEEsHhLh       ",
+    "        HhLLhHsSEEEsSSSSsEEEsHhLh       ",
+    "   .    HhLLhHssSeEssSSseESssHhLLh  .    ",
+    "        HHhhHOsssssSSsssssOHhhhh        ",
+    "         HHhHOssSSSSSSSSssOHhHH         ",
+    "          HHHHOSssSOOOssSOHHHH          ",
+]
+
 # Hand waving arm poses (Overrides rows 14..26, cols 27..40)
 WAVE_ARM_1 = {
     14: (27, "     sSSs  * "),
@@ -747,6 +793,8 @@ def build_frame(face_type="OPEN", sparkle_idx=0, wave_frame=0, jump_legs=False, 
         face_rows = FACE_SLEEPING
     elif face_type == "KISS":
         face_rows = FACE_KISS
+    elif face_type == "SAD":
+        face_rows = FACE_SAD
     else:
         face_rows = FACE_OPEN
         
@@ -833,7 +881,7 @@ def run_terminal_app(initial_greeting=False, theme_name="Princess Pink", enable_
     input_buffer = ""
     current_theme = theme_name
     palette = get_theme_palette(current_theme)
-    engine = DialogueEngine() if DialogueEngine else None
+    engine = DialogueEngine(use_llm=True) if DialogueEngine else None
     
     print("\033[38;2;255;105;180m  ✨ ✿ Princess Mia ✿ ✨ — Terminal Companion\033[0m")
     print("\033[38;2;200;180;220m  Type 'hello', '/theme <pink|violet|sunset>', '/chime', or 'q' to exit\033[0m\n")
@@ -962,7 +1010,7 @@ def run_terminal_app(initial_greeting=False, theme_name="Princess Pink", enable_
 # ---------------------------------------------------------------------------
 
 class PixelGirlPopup:
-    def __init__(self, pixel_size=10, initial_greeting=False, theme="Princess Pink", enable_sound=True, scene=None):
+    def __init__(self, pixel_size=10, initial_greeting=False, theme="Princess Pink", enable_sound=True, scene=None, use_llm=None):
         import tkinter as tk
         self.tk = tk
         
@@ -987,9 +1035,13 @@ class PixelGirlPopup:
         self.theme_buttons = {}
 
         # Dialogue Engine & State
-        self.dialogue_engine = DialogueEngine() if DialogueEngine else None
+        if use_llm is None:
+            use_llm = os.getenv("USE_LLM", "0") == "1"
+        self.use_llm = use_llm
+        self.dialogue_engine = DialogueEngine(use_llm=use_llm) if DialogueEngine else None
         self.friendship_level = self.dialogue_engine.get_friendship_level() if self.dialogue_engine else 0
         self.greeting_count = self.dialogue_engine.get_greeting_count() if self.dialogue_engine else 0
+        self.is_generating = False
 
         # Animation State
         self.frame_count = 0
@@ -1046,7 +1098,7 @@ class PixelGirlPopup:
         self.ml_method = "ml" if self.dialogue_engine else "heuristic"
         self.last_user_text = "hello" if initial_greeting else ""
         self.feedback_given = False
-        self.aura_enabled = True
+        self.aura_enabled = False
         self.ml_badge_label = None
         self.thumb_up_btn = None
         self.thumb_down_btn = None
@@ -1079,9 +1131,43 @@ class PixelGirlPopup:
             except Exception:
                 pass
         
+        # Side Chat Panel State (WhatsApp / Messenger style)
+        self.chat_visible = True
+        self.chat_frame = None
+        self.chat_text = None
+        self.chat_toggle_btn = None
+        self.side_entry_var = None
+        self.side_entry = None
+        self.chat_status_lbl = None
+
+        # 100% Free Offline-Capable Neural Speech Synthesis (edge-tts / espeak-ng)
+        self.tts_enabled = True
+        self.tts_engine = get_speech_engine() if get_speech_engine else (get_tts_engine() if get_tts_engine else None)
+        self.voice_btn = None
+
+        # Local Microphone Speech Recognition & Two-Way Voice System
+        self.auto_send_transcript = False
+        self.two_way_voice_mode = False
+        self.mic_recording_active = False
+        self.mic_capture = get_microphone_capture() if get_microphone_capture else None
+        self.mic_btn = None
+        self.mic_status_lbl = None
+        self.auto_send_btn = None
+        self.two_way_btn = None
+        self.mic_timer_job = None
+        self.mic_record_start_time = 0.0
+
+        if self.mic_capture:
+            self.mic_capture.set_callbacks(
+                on_state=self._on_mic_state_change,
+                on_volume=self._on_mic_volume_update,
+                on_transcript=self._on_mic_transcript_ready,
+            )
+
         self.build_ui()
         self.init_grid_cells()
         self.init_scene_elements()
+        self.load_recent_chat_history()
         
         # Start animation loop (~30 fps)
         self.root.after(30, self.update_animation)
@@ -1564,6 +1650,20 @@ class PixelGirlPopup:
             else:
                 self.sound_btn.config(text="🔕 Chime: OFF", fg="#8c7d9a", bg="#1e1828")
 
+    def toggle_voice(self):
+        """Toggles free offline speech synthesis on and off."""
+        self.tts_enabled = not getattr(self, "tts_enabled", True)
+        if hasattr(self, "tts_engine") and self.tts_engine:
+            self.tts_engine.enabled = self.tts_enabled
+            if not self.tts_enabled:
+                self.tts_engine.stop()
+        if hasattr(self, "voice_btn") and self.voice_btn:
+            if self.tts_enabled:
+                self.voice_btn.config(text="🔊 Voice: ON", fg="#06d6a0", bg="#2c1e38")
+            else:
+                self.voice_btn.config(text="🔈 Voice: OFF", fg="#8c7d9a", bg="#1e1828")
+        self.play_chime("CLICK")
+
     def play_chime(self, sound_type="GREETING"):
         """Emits an expressive procedural 8-bit retro sound effect when sound is enabled."""
         if not self.sound_enabled:
@@ -1791,15 +1891,50 @@ class PixelGirlPopup:
         )
         self.sound_btn.pack(side="right")
 
+        self.voice_btn = tk.Button(
+            top_bar,
+            text="🔊 Voice: ON" if getattr(self, "tts_enabled", True) else "🔈 Voice: OFF",
+            command=self.toggle_voice,
+            font=("DejaVu Sans", 8, "bold"),
+            bg="#2c1e38" if getattr(self, "tts_enabled", True) else "#1e1828",
+            fg="#06d6a0" if getattr(self, "tts_enabled", True) else "#8c7d9a",
+            activebackground="#ff69b4",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=8,
+            pady=2,
+            cursor="hand2"
+        )
+        self.voice_btn.pack(side="right", padx=(0, 6))
+
+        self.chat_toggle_btn = tk.Button(
+            top_bar,
+            text="💬 Chat: ON" if getattr(self, "chat_visible", True) else "💬 Chat: OFF",
+            command=self.toggle_chat_panel,
+            font=("DejaVu Sans", 8, "bold"),
+            bg="#2c1e38",
+            fg="#70d6ff",
+            activebackground="#ff69b4",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=8,
+            pady=2,
+            cursor="hand2"
+        )
+        self.chat_toggle_btn.pack(side="right", padx=(0, 6))
+
         # Top ML Status & Active Learning Feedback Bar
         ml_bar = tk.Frame(self.root, bg="#161224", padx=12, pady=4)
         ml_bar.pack(fill="x", padx=16, pady=(0, 2))
 
         init_badge = format_ml_badge(self.ml_intent, self.ml_intent_confidence, self.ml_emotion, self.ml_confidence)
-        init_aura = get_aura_properties(self.ml_confidence)["title"]
+        badge_str = f"🤖 ML: {init_badge}"
+        if getattr(self, "aura_enabled", False):
+            init_aura = get_aura_properties(self.ml_confidence)["title"]
+            badge_str += f" • Aura: {init_aura}"
         self.ml_badge_label = tk.Label(
             ml_bar,
-            text=f"🤖 ML: {init_badge} • Aura: {init_aura}",
+            text=badge_str,
             font=("DejaVu Sans", 8, "bold"),
             fg="#70d6ff",
             bg="#161224"
@@ -2023,16 +2158,26 @@ class PixelGirlPopup:
         )
         self.study_streak_label.pack(side="right")
         
+        # Main Stage: Character Canvas on Left, WhatsApp Side Chat Panel on Right
+        self.main_stage = tk.Frame(self.root, bg="#14111d")
+        self.main_stage.pack(fill="both", expand=True, padx=12, pady=2)
+
+        self.character_stage = tk.Frame(self.main_stage, bg="#14111d")
+        self.character_stage.pack(side="left", fill="both", expand=False)
+
         # Pixel Art Canvas
         canvas_bg = get_scene_data(self.current_scene)["bg_color"]
         self.canvas = tk.Canvas(
-            self.root,
+            self.character_stage,
             width=self.canvas_w,
             height=self.canvas_h,
             bg=canvas_bg,
             highlightthickness=0
         )
-        self.canvas.pack(padx=10, pady=2)
+        self.canvas.pack(padx=2, pady=2)
+
+        # WhatsApp-style Side Chat Drawer
+        self.build_chat_panel(self.main_stage)
         
         # Interactive Control Panel
         panel = tk.Frame(self.root, bg="#1a1626", padx=14, pady=8)
@@ -2190,9 +2335,24 @@ class PixelGirlPopup:
         )
         footer.pack()
         
-        # Hotkeys
-        self.root.bind("<Escape>", lambda e: self.root.destroy())
-        self.root.bind("<q>", lambda e: self.root.destroy() if not self.entry.focus_get() == self.entry else None)
+        # Hotkeys & Clean Exit
+        self.root.protocol("WM_DELETE_WINDOW", self.on_app_exit)
+        self.root.bind("<Escape>", lambda e: self.on_app_exit())
+        self.root.bind("<q>", lambda e: self.on_app_exit() if not self.entry.focus_get() == self.entry else None)
+
+    def on_app_exit(self):
+        """Cleanly stops TTS audio playback, cancels microphone, and destroys window."""
+        if hasattr(self, "mic_capture") and self.mic_capture:
+            try:
+                self.mic_capture.cancel_recording()
+            except Exception:
+                pass
+        if hasattr(self, "tts_engine") and self.tts_engine:
+            try:
+                self.tts_engine.stop()
+            except Exception:
+                pass
+        self.root.destroy()
         
         # Center window on screen
         self.root.update_idletasks()
@@ -2203,6 +2363,425 @@ class PixelGirlPopup:
         x = (ws // 2) - (w // 2)
         y = (hs // 2) - (h // 2) - 20
         self.root.geometry(f"+{x}+{y}")
+
+    def build_chat_panel(self, parent):
+        """Constructs the WhatsApp / Messenger style companion chat history drawer."""
+        tk = self.tk
+        self.chat_frame = tk.Frame(parent, bg="#161224", bd=1, relief="solid", highlightbackground="#2c1e38", highlightthickness=1, width=320)
+        self.chat_frame.pack(side="right", fill="both", expand=True, padx=(6, 0), pady=2)
+        self.chat_frame.pack_propagate(False)
+
+        # 1. Header with Avatar & Online Status
+        header = tk.Frame(self.chat_frame, bg="#1f182e", padx=10, pady=6)
+        header.pack(fill="x")
+
+        ava = tk.Label(header, text="🌸", font=("DejaVu Sans", 13), bg="#1f182e")
+        ava.pack(side="left", padx=(0, 6))
+
+        info = tk.Frame(header, bg="#1f182e")
+        info.pack(side="left")
+
+        name_lbl = tk.Label(info, text="Princess Mia", font=("DejaVu Sans", 10, "bold"), fg="#ff85c0", bg="#1f182e")
+        name_lbl.pack(anchor="w")
+
+        self.chat_status_lbl = tk.Label(
+            info,
+            text="● Online • Local SLM" if self.use_llm else "● Active • Companion",
+            font=("DejaVu Sans", 7),
+            fg="#06d6a0",
+            bg="#1f182e"
+        )
+        self.chat_status_lbl.pack(anchor="w")
+
+        btn_close = tk.Button(
+            header, text="✕", command=self.toggle_chat_panel,
+            font=("DejaVu Sans", 8, "bold"), bg="#2c1e38", fg="#c0adc8",
+            activebackground="#ef476f", activeforeground="#ffffff", relief="flat", cursor="hand2", padx=5
+        )
+        btn_close.pack(side="right", padx=2)
+
+        btn_delete = tk.Button(
+            header, text="🗑 Delete", command=self.delete_chat_history,
+            font=("DejaVu Sans", 8, "bold"), bg="#2c1e38", fg="#ff85a1",
+            activebackground="#d81b60", activeforeground="#ffffff", relief="flat", cursor="hand2", padx=6
+        )
+        btn_delete.pack(side="right", padx=2)
+
+        # 2. Scrollable Message Stream
+        body = tk.Frame(self.chat_frame, bg="#100c19")
+        body.pack(fill="both", expand=True, padx=4, pady=4)
+
+        scroll = tk.Scrollbar(body)
+        scroll.pack(side="right", fill="y")
+
+        self.chat_text = tk.Text(
+            body,
+            wrap="word",
+            bg="#100c19",
+            fg="#e2e8f0",
+            font=("DejaVu Sans", 9),
+            padx=8,
+            pady=8,
+            relief="flat",
+            yscrollcommand=scroll.set,
+            cursor="arrow"
+        )
+        self.chat_text.pack(side="left", fill="both", expand=True)
+        scroll.config(command=self.chat_text.yview)
+
+        # Tags for WhatsApp-style chat styling
+        self.chat_text.tag_configure("user_hdr", justify="right", foreground="#70d6ff", font=("DejaVu Sans", 7, "bold"))
+        self.chat_text.tag_configure("user_bubble", justify="right", foreground="#ffffff", background="#2a1e40", lmargin1=40, lmargin2=40, rmargin=6)
+        self.chat_text.tag_configure("mia_hdr", justify="left", foreground="#ff85c0", font=("DejaVu Sans", 7, "bold"))
+        self.chat_text.tag_configure("mia_bubble", justify="left", foreground="#f8fafc", background="#1a1528", lmargin1=6, lmargin2=6, rmargin=40)
+        self.chat_text.tag_configure("meta_time", foreground="#64748b", font=("DejaVu Sans", 7))
+        self.chat_text.tag_configure("sys_note", justify="center", foreground="#8c7d9a", font=("DejaVu Sans", 7, "italic"))
+
+        # 3. Dedicated Chat Input Bar & Microphone Controls
+        self.mic_bar = tk.Frame(self.chat_frame, bg="#161224", padx=6, pady=3)
+        self.mic_bar.pack(fill="x")
+
+        self.mic_status_lbl = tk.Label(
+            self.mic_bar,
+            text="🎙️ Mic ready • Click mic to speak",
+            font=("DejaVu Sans", 7),
+            fg="#8c7d9a",
+            bg="#161224"
+        )
+        self.mic_status_lbl.pack(side="left")
+
+        self.two_way_btn = tk.Button(
+            self.mic_bar,
+            text="🗣️ 2-Way: OFF",
+            command=self.toggle_two_way_voice,
+            font=("DejaVu Sans", 7, "bold"),
+            bg="#1f182e",
+            fg="#8c7d9a",
+            activebackground="#ff69b4",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=4,
+            pady=1,
+            cursor="hand2"
+        )
+        self.two_way_btn.pack(side="right", padx=2)
+
+        self.auto_send_btn = tk.Button(
+            self.mic_bar,
+            text="⚡ Auto: OFF",
+            command=self.toggle_auto_send,
+            font=("DejaVu Sans", 7, "bold"),
+            bg="#1f182e",
+            fg="#8c7d9a",
+            activebackground="#ff69b4",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=4,
+            pady=1,
+            cursor="hand2"
+        )
+        self.auto_send_btn.pack(side="right", padx=2)
+
+        bottom_bar = tk.Frame(self.chat_frame, bg="#1f182e", padx=6, pady=6)
+        bottom_bar.pack(fill="x")
+
+        self.side_entry_var = tk.StringVar()
+        self.side_entry = tk.Entry(
+            bottom_bar,
+            textvariable=self.side_entry_var,
+            font=("DejaVu Sans", 9),
+            bg="#2a233b",
+            fg="#ffffff",
+            insertbackground="#ff69b4",
+            relief="flat",
+            bd=3
+        )
+        self.side_entry.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.side_entry.bind("<Return>", lambda e: self.on_side_send())
+
+        self.mic_btn = tk.Button(
+            bottom_bar,
+            text="🎙️",
+            command=self.toggle_microphone_recording,
+            bg="#2c1e38",
+            fg="#70d6ff",
+            activebackground="#ff4081",
+            activeforeground="#ffffff",
+            relief="flat",
+            font=("DejaVu Sans", 9),
+            padx=7,
+            pady=2,
+            cursor="hand2"
+        )
+        self.mic_btn.pack(side="right", padx=(0, 4))
+
+        side_send = tk.Button(
+            bottom_bar,
+            text="➤",
+            command=self.on_side_send,
+            bg="#d81b60",
+            fg="#ffffff",
+            activebackground="#ff4081",
+            relief="flat",
+            font=("DejaVu Sans", 9, "bold"),
+            padx=8,
+            pady=2,
+            cursor="hand2"
+        )
+        side_send.pack(side="right")
+
+    def append_chat_message(self, sender: str, text: str, emotion: str = "NORMAL"):
+        """Appends a message bubble to the side chat drawer."""
+        if not hasattr(self, "chat_text") or not self.chat_text:
+            return
+
+        now_str = datetime.now().strftime("%H:%M")
+        try:
+            self.chat_text.config(state="normal")
+            if sender.lower() == "user":
+                self.chat_text.insert("end", f"You • {now_str}\n", "user_hdr")
+                self.chat_text.insert("end", f" {text} \n\n", "user_bubble")
+            else:
+                emo_icon = "💔" if emotion in ("SAD", "HURT") else ("💖" if emotion == "LOVE" else "🌸")
+                self.chat_text.insert("end", f"Mia {emo_icon} • {now_str}\n", "mia_hdr")
+                self.chat_text.insert("end", f" {text} \n\n", "mia_bubble")
+
+            self.chat_text.config(state="disabled")
+            self.chat_text.yview_moveto(1.0)
+        except Exception:
+            pass
+
+    def load_recent_chat_history(self):
+        """Pre-loads recent turns from companion database into the chat drawer."""
+        if not hasattr(self, "chat_text") or not self.chat_text:
+            return
+        if not self.dialogue_engine or not getattr(self.dialogue_engine, "db_path", None):
+            return
+        try:
+            turns = []
+            if get_conversation_context is not None:
+                turns = get_conversation_context(limit=8, db_path=self.dialogue_engine.db_path)
+            self.chat_text.config(state="normal")
+            if not turns:
+                self.chat_text.insert("end", "✨ Start of conversation with Princess Mia ✨\n\n", "sys_note")
+            else:
+                self.chat_text.insert("end", "─── Recent Conversation ───\n\n", "sys_note")
+                for turn in turns:
+                    role = turn.get("role", "user")
+                    content = turn.get("content", "")
+                    if role == "user":
+                        self.chat_text.insert("end", "You\n", "user_hdr")
+                        self.chat_text.insert("end", f" {content} \n\n", "user_bubble")
+                    else:
+                        self.chat_text.insert("end", "Mia 🌸\n", "mia_hdr")
+                        self.chat_text.insert("end", f" {content} \n\n", "mia_bubble")
+            self.chat_text.config(state="disabled")
+            self.chat_text.yview_moveto(1.0)
+        except Exception:
+            pass
+
+    def delete_chat_history(self):
+        """Clears both the visual chat drawer and persistent SQLite interaction history."""
+        # 1. Clear database history
+        if self.dialogue_engine:
+            if hasattr(self.dialogue_engine, "clear_history"):
+                self.dialogue_engine.clear_history()
+            elif clear_conversation_history and getattr(self.dialogue_engine, "db_path", None):
+                clear_conversation_history(self.dialogue_engine.db_path)
+        elif clear_conversation_history:
+            clear_conversation_history()
+
+        # 2. Clear visual text in chat drawer
+        if hasattr(self, "chat_text") and self.chat_text:
+            try:
+                self.chat_text.config(state="normal")
+                self.chat_text.delete("1.0", "end")
+                self.chat_text.insert("end", "✨ Chat history & persistent memories cleared ✨\n\n", "sys_note")
+                self.chat_text.config(state="disabled")
+            except Exception:
+                pass
+
+    def clear_chat_display(self):
+        """Backwards-compatibility alias for delete_chat_history."""
+        self.delete_chat_history()
+
+    def toggle_chat_panel(self):
+        """Toggles the side chat drawer visibility."""
+        if not hasattr(self, "chat_frame") or not self.chat_frame:
+            return
+        self.chat_visible = not getattr(self, "chat_visible", True)
+        if self.chat_visible:
+            self.chat_frame.pack(side="right", fill="both", expand=True, padx=(6, 0), pady=2)
+            if hasattr(self, "chat_toggle_btn") and self.chat_toggle_btn:
+                self.chat_toggle_btn.config(text="💬 Chat: ON", bg="#2c1e38", fg="#70d6ff")
+            if hasattr(self, "chat_text") and self.chat_text:
+                self.chat_text.yview_moveto(1.0)
+        else:
+            self.chat_frame.pack_forget()
+            if hasattr(self, "chat_toggle_btn") and self.chat_toggle_btn:
+                self.chat_toggle_btn.config(text="💬 Chat: OFF", bg="#1e1828", fg="#8c7d9a")
+
+    def on_side_send(self):
+        """Handles sending from the side chat panel entry."""
+        if not hasattr(self, "side_entry_var") or not self.side_entry_var:
+            return
+        txt = self.side_entry_var.get().strip()
+        self.side_entry_var.set("")
+        if txt:
+            self.handle_user_input(txt, async_mode=True)
+
+    def toggle_microphone_recording(self):
+        """Toggles microphone capture start and stop."""
+        if not getattr(self, "mic_capture", None):
+            self.append_chat_message("mia", "Local microphone is not available or initialized.", emotion="NORMAL")
+            return
+
+        if self.mic_capture.state == MicrophoneState.RECORDING:
+            self.stop_microphone_recording()
+        else:
+            self.start_microphone_recording()
+
+    def start_microphone_recording(self):
+        """Starts capturing audio from microphone."""
+        if not getattr(self, "mic_capture", None):
+            return
+        if getattr(self, "is_generating", False):
+            return
+
+        # Stop any active TTS audio so speech synthesis does not echo into mic
+        if hasattr(self, "tts_engine") and self.tts_engine:
+            try:
+                self.tts_engine.stop()
+            except Exception:
+                pass
+
+        self.mic_record_start_time = time.time()
+        ok = self.mic_capture.start_recording()
+        if ok:
+            self._update_recording_timer()
+
+    def stop_microphone_recording(self):
+        """Stops active recording and triggers transcription."""
+        if not getattr(self, "mic_capture", None):
+            return
+        self.mic_capture.stop_recording()
+
+    def _update_recording_timer(self):
+        """Animates elapsed recording seconds in the mic status label."""
+        if getattr(self, "mic_capture", None) and self.mic_capture.state == MicrophoneState.RECORDING:
+            elapsed = int(time.time() - self.mic_record_start_time)
+            mins = elapsed // 60
+            secs = elapsed % 60
+            time_str = f"{mins:02d}:{secs:02d}"
+            dot = "🔴" if (elapsed % 2 == 0) else "⭕"
+            if hasattr(self, "mic_status_lbl") and self.mic_status_lbl:
+                self.mic_status_lbl.config(text=f"{dot} Recording {time_str} • Speak now", fg="#ff4d6d")
+            self.mic_timer_job = self.root.after(500, self._update_recording_timer)
+
+    def toggle_auto_send(self):
+        """Toggles whether transcribed speech is automatically sent without editing."""
+        self.auto_send_transcript = not getattr(self, "auto_send_transcript", False)
+        if hasattr(self, "auto_send_btn") and self.auto_send_btn:
+            if self.auto_send_transcript:
+                self.auto_send_btn.config(text="⚡ Auto: ON", fg="#ffd166", bg="#2c1e38")
+            else:
+                self.auto_send_btn.config(text="⚡ Auto: OFF", fg="#8c7d9a", bg="#1f182e")
+        self.play_chime("CLICK")
+
+    def toggle_two_way_voice(self):
+        """Toggles hands-free continuous two-way voice conversation mode."""
+        self.two_way_voice_mode = not getattr(self, "two_way_voice_mode", False)
+        if hasattr(self, "two_way_btn") and self.two_way_btn:
+            if self.two_way_voice_mode:
+                self.two_way_btn.config(text="🗣️ 2-Way: ON", fg="#06d6a0", bg="#2c1e38")
+                # Immediately start listening
+                self.start_microphone_recording()
+            else:
+                self.two_way_btn.config(text="🗣️ 2-Way: OFF", fg="#8c7d9a", bg="#1f182e")
+                self.stop_microphone_recording()
+        self.play_chime("CLICK")
+
+    def _on_mic_state_change(self, state, info: Optional[str] = None):
+        """Thread-safe UI updates for microphone state transitions."""
+        def _gui():
+            if not hasattr(self, "mic_btn") or not self.mic_btn:
+                return
+
+            if state == MicrophoneState.RECORDING:
+                self.mic_btn.config(text="⏹", bg="#e63946", fg="#ffffff")
+                if hasattr(self, "mic_status_lbl") and self.mic_status_lbl:
+                    self.mic_status_lbl.config(text="🔴 Listening... Click ⏹ to finish", fg="#ff4d6d")
+
+            elif state == MicrophoneState.PROCESSING:
+                self.mic_btn.config(text="⏳", bg="#4a4e69", fg="#ffd166")
+                if hasattr(self, "mic_status_lbl") and self.mic_status_lbl:
+                    self.mic_status_lbl.config(text="⏳ Transcribing speech (faster-whisper)...", fg="#ffd166")
+
+            elif state == MicrophoneState.TRANSCRIPT_READY:
+                self.mic_btn.config(text="🎙️", bg="#2c1e38", fg="#70d6ff")
+                if hasattr(self, "mic_status_lbl") and self.mic_status_lbl:
+                    trunc = (info or "")[:28] + ("..." if len(info or "") > 28 else "")
+                    self.mic_status_lbl.config(text=f"✓ \"{trunc}\"", fg="#06d6a0")
+
+            elif state == MicrophoneState.ERROR:
+                self.mic_btn.config(text="⚠️", bg="#2c1e38", fg="#e63946")
+                if hasattr(self, "mic_status_lbl") and self.mic_status_lbl:
+                    self.mic_status_lbl.config(text=f"⚠️ {info or 'Mic error'}", fg="#e63946")
+
+            else:  # IDLE
+                self.mic_btn.config(text="🎙️", bg="#2c1e38", fg="#70d6ff")
+                if hasattr(self, "mic_status_lbl") and self.mic_status_lbl:
+                    two_way_note = " • [2-Way Active]" if getattr(self, "two_way_voice_mode", False) else ""
+                    self.mic_status_lbl.config(text=f"🎙️ Mic ready • Click to speak{two_way_note}", fg="#8c7d9a")
+
+        if threading.current_thread() is threading.main_thread():
+            _gui()
+        elif hasattr(self, "root") and self.root:
+            self.root.after(0, _gui)
+        else:
+            _gui()
+
+    def _on_mic_volume_update(self, norm_volume: float):
+        """Real-time volume meter indicator."""
+        pass
+
+    def _on_mic_transcript_ready(self, res: Dict[str, Any]):
+        """Transcribed user text received from local speech recognition."""
+        text = res.get("text", "").strip()
+        if not text:
+            return
+
+        def _gui():
+            if hasattr(self, "side_entry_var") and self.side_entry_var:
+                self.side_entry_var.set(text)
+            if hasattr(self, "entry_var") and self.entry_var:
+                self.entry_var.set(text)
+
+            # Auto-send if enabled or in Two-Way Voice Mode
+            if getattr(self, "auto_send_transcript", False) or getattr(self, "two_way_voice_mode", False):
+                self.on_side_send()
+            else:
+                if hasattr(self, "side_entry") and self.side_entry:
+                    self.side_entry.focus_set()
+                    self.side_entry.icursor("end")
+
+        if threading.current_thread() is threading.main_thread():
+            _gui()
+        elif hasattr(self, "root") and self.root:
+            self.root.after(0, _gui)
+        else:
+            _gui()
+
+    def _on_mia_speech_finished(self, success: bool = True):
+        """Called when Mia completes speaking her voice response."""
+        if getattr(self, "two_way_voice_mode", False):
+            # Natural turn-taking pause (650ms) before opening microphone again
+            self.root.after(650, self._auto_resume_listening_for_two_way)
+
+    def _auto_resume_listening_for_two_way(self):
+        """Automatically restarts microphone in two-way voice mode."""
+        if getattr(self, "two_way_voice_mode", False) and not getattr(self, "is_generating", False):
+            self.start_microphone_recording()
 
     def init_grid_cells(self):
         """Creates the pixel rectangle items on the canvas once."""
@@ -2252,13 +2831,18 @@ class PixelGirlPopup:
         self.ml_emotion = emotion
         self.ml_confidence = emotion_conf
 
-        aura_props = get_aura_properties(emotion_conf)
         badge_text = format_ml_badge(intent, intent_conf, emotion, emotion_conf)
 
         if hasattr(self, "ml_badge_label") and self.ml_badge_label:
-            self.ml_badge_label.config(
-                text=f"🤖 ML: {badge_text} • Aura: {aura_props['title']}"
-            )
+            if getattr(self, "aura_enabled", False):
+                aura_props = get_aura_properties(emotion_conf)
+                self.ml_badge_label.config(
+                    text=f"🤖 ML: {badge_text} • Aura: {aura_props['title']}"
+                )
+            else:
+                self.ml_badge_label.config(
+                    text=f"🤖 ML: {badge_text}"
+                )
         if hasattr(self, "feedback_label") and self.feedback_label:
             self.feedback_label.config(text="")
         if hasattr(self, "thumb_up_btn") and self.thumb_up_btn:
@@ -2653,7 +3237,7 @@ class PixelGirlPopup:
         self.particles = active
         self.action_particles = self.particles
 
-    def handle_user_input(self, user_text: str):
+    def handle_user_input(self, user_text: str, async_mode: bool = False):
         """Processes user input through DialogueEngine and updates UI reactions."""
         if not user_text:
             return
@@ -2661,42 +3245,69 @@ class PixelGirlPopup:
         self.last_user_text = user_text
         self.feedback_given = False
 
-        # Determine and trigger expressive physical animation action
-        lower = user_text.lower()
-        words = set(re.findall(r"\b\w+\b", lower))
-        if words & {"jump", "crazy", "omg", "yay", "won", "awesome", "hype", "woohoo"}:
-            self.trigger_action("JUMPING", duration=1.2)
-        elif words & {"wave", "hello", "hi", "hey", "greet", "morning", "evening"}:
-            self.trigger_action("WAVING", duration=2.2)
-        elif words & {"kiss", "smooch", "mwah"}:
-            self.trigger_action("KISSING", duration=2.5)
-        elif words & {"dance", "party", "spin", "boogie"}:
-            self.trigger_action("DANCING", duration=3.0)
-        elif words & {"sleep", "nap", "tired", "bed", "goodnight", "rest"}:
-            self.trigger_action("SLEEPING", duration=3.5)
-        elif words & {"love", "cute", "pretty", "beautiful", "blush", "marry", "sweet", "heart"}:
-            self.trigger_action("BLUSHING", duration=2.6)
-        elif words & {"celebrate", "hurray", "winner", "congrats"}:
-            self.trigger_action("CELEBRATING", duration=2.5)
+        # 1. Log to WhatsApp-style side chat drawer
+        self.append_chat_message("user", user_text)
 
+        # 2. Check for scolding / harsh user commands ("shut up", "be quiet", etc.)
+        lower = user_text.lower()
+        is_scold = bool(re.search(
+            r"\b(shut\s*up|be\s+quiet|stop\s+talking|leave\s+me\s+alone|go\s+away|annoying|hate\s+you|piss\s+off|get\s+lost|stupid|shut\s+your\s+mouth)\b",
+            lower
+        ))
+
+        if is_scold:
+            # Genuine hurt/quiet reaction: drop physical animations and adopt solemn/sad face
+            self.expression = "SAD"
+            self.action_state = ActionState.IDLE
+            self.play_chime("CLICK")
+        else:
+            # Determine and trigger expressive physical animation action
+            words = set(re.findall(r"\b\w+\b", lower))
+            if words & {"jump", "crazy", "omg", "yay", "won", "awesome", "hype", "woohoo"}:
+                self.trigger_action("JUMPING", duration=1.2)
+            elif words & {"wave", "hello", "hi", "hey", "greet", "morning", "evening"}:
+                self.trigger_action("WAVING", duration=2.2)
+            elif words & {"kiss", "smooch", "mwah"}:
+                self.trigger_action("KISSING", duration=2.5)
+            elif words & {"dance", "party", "spin", "boogie"}:
+                self.trigger_action("DANCING", duration=3.0)
+            elif words & {"sleep", "nap", "tired", "bed", "goodnight", "rest"}:
+                self.trigger_action("SLEEPING", duration=3.5)
+            elif words & {"love", "cute", "pretty", "beautiful", "blush", "marry", "sweet", "heart"}:
+                self.trigger_action("BLUSHING", duration=2.6)
+            elif words & {"celebrate", "hurray", "winner", "congrats"}:
+                self.trigger_action("CELEBRATING", duration=2.5)
+
+        if async_mode and self.dialogue_engine and hasattr(self, "root") and self.root:
+            if getattr(self, "is_generating", False):
+                return
+            self.is_generating = True
+            self.show_thinking()
+
+            def _on_done(res):
+                if hasattr(self, "root") and self.root:
+                    self.root.after(0, lambda: self._apply_dialogue_result(res))
+                else:
+                    self._apply_dialogue_result(res)
+
+            self.dialogue_engine.process_message_async(
+                user_text,
+                callback=_on_done,
+            )
+            return
+
+        # Synchronous path (for tests and direct interaction)
         self.show_thinking()
         try:
             if self.dialogue_engine:
                 res = self.dialogue_engine.process_message(user_text)
-                reply = res["reply_text"]
-                emotion = res.get("emotion", "NORMAL")
-                emo_conf = res.get("emotion_confidence", 0.85)
-                intent = res.get("intent", "CHAT")
-                int_conf = res.get("intent_confidence", 0.85)
-                friendship = res.get("friendship_level", self.friendship_level)
-
-                self.update_friendship_display(friendship)
-                self.update_ml_display(intent, int_conf, emotion, emo_conf)
-                self.trigger_speech(reply, emotion=emotion)
-                suggested_sound = res.get("suggested_sound", "GREETING")
-                self.play_chime(suggested_sound)
+                self._apply_dialogue_result(res)
             else:
-                if "hello" in lower or "hi" in lower:
+                if is_scold:
+                    reply = "...Fine. I'll be quiet then."
+                    intent = "CHAT"
+                    emotion = "SAD"
+                elif "hello" in lower or "hi" in lower:
                     reply = "HELLO! ♥"
                     intent = "GREETING"
                     emotion = "HAPPY"
@@ -2710,18 +3321,38 @@ class PixelGirlPopup:
                     emotion = "HAPPY"
                 self.update_ml_display(intent, 0.85, emotion, 0.85)
                 self.trigger_speech(reply, emotion=emotion)
-                sound = "BLUSH" if emotion == "LOVE" else ("GREETING" if intent == "GREETING" else "CLICK")
+                sound = "CLICK" if is_scold else ("BLUSH" if emotion == "LOVE" else ("GREETING" if intent == "GREETING" else "CLICK"))
                 self.play_chime(sound)
         finally:
             self.hide_thinking()
 
+    def _apply_dialogue_result(self, res: Dict[str, Any]):
+        """Applies dialogue response, updates ML badge, friendship, sound, and speech cloud."""
+        self.is_generating = False
+        self.hide_thinking()
+        reply = res.get("reply_text", "...")
+        emotion = res.get("emotion", "NORMAL")
+        emo_conf = res.get("emotion_confidence", 0.85)
+        intent = res.get("intent", "CHAT")
+        int_conf = res.get("intent_confidence", 0.85)
+        friendship = res.get("friendship_level", self.friendship_level)
+
+        # Log Mia's generated response to the WhatsApp-style side chat drawer
+        self.append_chat_message("mia", reply, emotion=emotion)
+
+        self.update_friendship_display(friendship)
+        self.update_ml_display(intent, int_conf, emotion, emo_conf)
+        self.trigger_speech(reply, emotion=emotion)
+        suggested_sound = res.get("suggested_sound", "GREETING")
+        self.play_chime(suggested_sound)
+
     def on_send(self):
         user_text = self.entry_var.get().strip()
         self.entry_var.set("")
-        self.handle_user_input(user_text)
+        self.handle_user_input(user_text, async_mode=True)
 
-    def trigger_speech(self, text, emotion="HAPPY"):
-        """Triggers the animated speech cloud reaction with emotion expression."""
+    def trigger_speech(self, text, emotion="HAPPY", on_done=None):
+        """Triggers the animated speech cloud reaction with emotion expression and expressive voice."""
         self.speech_active = True
         self.speech_text = text
         self.speech_start_time = time.time()
@@ -2730,6 +3361,8 @@ class PixelGirlPopup:
         # Set expression based on emotion
         if emotion in ("HAPPY", "LOVE"):
             self.expression = "HAPPY"
+        elif emotion in ("SAD", "HURT"):
+            self.expression = "SAD"
         elif emotion == "SHY":
             self.expression = "HALF"
         elif emotion == "PLAYFUL":
@@ -2737,35 +3370,96 @@ class PixelGirlPopup:
         else:
             self.expression = "OPEN"
 
+        # 100% Free offline-capable neural speech synthesis with emotional voice routing
+        if getattr(self, "tts_enabled", True) and getattr(self, "tts_engine", None):
+            try:
+                cb = on_done or getattr(self, "_on_mia_speech_finished", None)
+                profile = VoiceProfile.DEFAULT if VoiceProfile else "DEFAULT_FEMALE"
+                if resolve_voice_profile:
+                    profile = resolve_voice_profile(
+                        mia_emotion=emotion,
+                        user_emotion=getattr(self, "last_user_emotion", None),
+                        text=text,
+                    )
+                if hasattr(self.tts_engine, "speak_async"):
+                    import inspect
+                    sig = inspect.signature(self.tts_engine.speak_async)
+                    if "profile" in sig.parameters:
+                        self.tts_engine.speak_async(text, profile=profile, on_done=cb)
+                    else:
+                        self.tts_engine.speak_async(text, on_done=cb)
+            except Exception:
+                pass
+
     def draw_speech_cloud(self, cx, cy, scale, t):
-        """Draws the animated fluffy speech cloud and bouncing letters."""
+        """Draws the dynamic fluffy speech cloud, adapting in size and never overflowing."""
         self.canvas.delete("cloud")
         if scale <= 0.02:
             return
-            
-        # Cloud puff circles (relative dx, dy, radius)
-        puffs = [
-            (-65, 8, 32), (-45, -16, 36), (-12, -22, 42),
-            (25, -20, 38), (62, -6, 34), (68, 14, 28),
-            (35, 24, 34), (-5, 26, 38), (-40, 22, 34)
-        ]
-        
-        outline_col = "#e88bb7"
-        fill_col = "#ffffff"
-        
-        # 1. Outer outline puffs
-        for dx, dy, r in puffs:
-            r_s = r * scale
-            x, y = cx + dx * scale, cy + dy * scale
+
+        text = self.speech_text
+        if not text:
+            return
+
+        # 1. Determine wrapping and snippet for overhead cloud display
+        raw_lines = textwrap.wrap(text, width=22) if len(text) > 18 else [text]
+
+        # In the cloud above her head, show up to 3 lines cleanly without overflow.
+        # Long replies are indicated with '...' and can be read in full in the side chat panel!
+        is_long = len(raw_lines) > 3 or len(text) > 75
+        if is_long:
+            display_lines = raw_lines[:2]
+            third_line = raw_lines[2] if len(raw_lines) > 2 else ""
+            if len(third_line) > 16:
+                third_line = third_line[:14] + "..."
+            else:
+                third_line = third_line + "..."
+            display_lines.append(third_line)
+        else:
+            display_lines = raw_lines
+
+        max_line_len = max(len(l) for l in display_lines) if display_lines else 1
+        line_count = len(display_lines)
+
+        # 2. Dynamic cloud dimensions adapting to text length
+        cloud_half_w = max(68.0, (max_line_len * 4.6 + 28.0)) * scale
+        cloud_half_h = max(34.0, (line_count * 10.5 + 18.0)) * scale
+
+        # Palette selection based on emotion
+        is_sad = getattr(self, "expression", "NORMAL") in ("SAD", "HALF") or getattr(self, "ml_emotion", "NORMAL") in ("SAD", "HURT")
+        if is_sad:
+            outline_col = "#7b8cde"
+            fill_col = "#f5f6fa"
+            letter_colors = ["#2b2d42", "#4a5568", "#3a0ca3", "#4361ee"]
+        else:
+            outline_col = "#e88bb7"
+            fill_col = "#ffffff"
+            letter_colors = ["#ff007f", "#e91e63", "#d81b60", "#ff4081", "#c2185b", "#9c27b0"]
+
+        # 3. Outer outline perimeter puffs
+        puff_radius = max(20.0, 26.0 * scale)
+        num_puffs = 10
+        for i in range(num_puffs):
+            ang = (2 * math.pi / num_puffs) * i
+            px = cx + math.cos(ang) * (cloud_half_w - puff_radius * 0.45)
+            py = cy + math.sin(ang) * (cloud_half_h - puff_radius * 0.45)
             self.canvas.create_oval(
-                x - r_s - 3, y - r_s - 3, x + r_s + 3, y + r_s + 3,
+                px - puff_radius - 2, py - puff_radius - 2,
+                px + puff_radius + 2, py + puff_radius + 2,
                 fill=outline_col, outline="", tags="cloud"
             )
-            
-        # 2. Cloud tail puffs pointing to her head
+
+        # Center core fill to ensure the text backing is completely solid
+        self.canvas.create_oval(
+            cx - cloud_half_w - 2, cy - cloud_half_h - 2,
+            cx + cloud_half_w + 2, cy + cloud_half_h + 2,
+            fill=outline_col, outline="", tags="cloud"
+        )
+
+        # Cloud tail pointing toward Mia's head
         tail_puffs = [
-            (-20 * scale, 40 * scale, 10 * scale),
-            (-32 * scale, 58 * scale, 6 * scale)
+            (-18 * scale, cloud_half_h + 8 * scale, 9 * scale),
+            (-28 * scale, cloud_half_h + 22 * scale, 6 * scale)
         ]
         for tx, ty, tr in tail_puffs:
             self.canvas.create_oval(
@@ -2776,35 +3470,39 @@ class PixelGirlPopup:
                 cx + tx - tr, cy + ty - tr, cx + tx + tr, cy + ty + tr,
                 fill=fill_col, outline="", tags="cloud"
             )
-            
-        # 3. Inner fill puffs
-        for dx, dy, r in puffs:
-            r_s = r * scale
-            x, y = cx + dx * scale, cy + dy * scale
+
+        # Inner fill puffs
+        for i in range(num_puffs):
+            ang = (2 * math.pi / num_puffs) * i
+            px = cx + math.cos(ang) * (cloud_half_w - puff_radius * 0.45)
+            py = cy + math.sin(ang) * (cloud_half_h - puff_radius * 0.45)
             self.canvas.create_oval(
-                x - r_s, y - r_s, x + r_s, y + r_s,
+                px - puff_radius, py - puff_radius,
+                px + puff_radius, py + puff_radius,
                 fill=fill_col, outline="", tags="cloud"
             )
-            
-        # 4. Animated wave text inside cloud
-        if scale > 0.6:
-            text = self.speech_text
-            lines = textwrap.wrap(text, width=18) if len(text) > 16 else [text]
-            letter_colors = ["#ff007f", "#e91e63", "#d81b60", "#ff4081", "#c2185b", "#9c27b0"]
-            
-            line_height = int(18 * scale)
-            start_y = cy - ((len(lines) - 1) * line_height / 2.0)
-            
-            for line_idx, line in enumerate(lines):
-                if len(lines) == 1 and len(line) <= 14:
-                    spacing = 15 * scale
+
+        self.canvas.create_oval(
+            cx - cloud_half_w, cy - cloud_half_h,
+            cx + cloud_half_w, cy + cloud_half_h,
+            fill=fill_col, outline="", tags="cloud"
+        )
+
+        # 4. Text rendering inside cloud
+        if scale > 0.55:
+            line_height = int(17 * scale)
+            start_y = cy - ((len(display_lines) - 1) * line_height / 2.0)
+            font_size = max(8, int(11 * scale)) if len(display_lines) > 1 else max(8, int(13 * scale))
+
+            for line_idx, line in enumerate(display_lines):
+                if len(display_lines) == 1 and len(line) <= 12 and not is_sad:
+                    spacing = 14 * scale
                     total_w = len(line) * spacing
                     start_x = cx - (total_w / 2.0) + (spacing / 2.0)
-                    font_size = max(8, int(15 * scale))
                     for idx, ch in enumerate(line):
-                        wave_offset = math.sin(t * 6.0 + idx * 0.7) * (4.0 * scale)
+                        wave_offset = math.sin(t * 6.0 + idx * 0.7) * (3.5 * scale)
                         lx = start_x + (idx * spacing)
-                        ly = start_y + wave_offset + (2 * scale)
+                        ly = start_y + wave_offset
                         col = letter_colors[(int(t * 4) + idx) % len(letter_colors)]
                         self.canvas.create_text(
                             lx, ly, text=ch,
@@ -2812,31 +3510,32 @@ class PixelGirlPopup:
                             fill=col, tags="cloud"
                         )
                 else:
-                    font_size = max(8, int(12 * scale))
-                    bounce_offset = math.sin(t * 4.0 + line_idx) * (2.0 * scale)
-                    col = letter_colors[(int(t * 3) + line_idx) % len(letter_colors)]
+                    bounce = math.sin(t * 4.0 + line_idx) * (1.5 * scale) if not is_sad else 0.0
+                    col = letter_colors[(int(t * 2) + line_idx) % len(letter_colors)]
                     self.canvas.create_text(
-                        cx, start_y + (line_idx * line_height) + bounce_offset,
+                        cx, start_y + (line_idx * line_height) + bounce,
                         text=line,
                         font=("DejaVu Sans", font_size, "bold"),
                         fill=col, tags="cloud"
                     )
-                
-            # Floating sparkles around cloud
-            sparkle_angles = [0.2, 1.8, 3.4, 4.9]
-            sparkle_chars = ["✦", "✧", "♥", "★"]
-            for s_idx, angle in enumerate(sparkle_angles):
-                s_dist = (88 + math.sin(t * 4 + s_idx) * 8) * scale
-                sx = cx + math.cos(angle + t * 0.8) * s_dist
-                sy = cy + math.sin(angle + t * 0.8) * s_dist * 0.6
-                s_col = letter_colors[(s_idx + int(t * 3)) % len(letter_colors)]
-                self.canvas.create_text(
-                    sx, sy,
-                    text=sparkle_chars[s_idx % len(sparkle_chars)],
-                    font=("DejaVu Sans", max(7, int(11 * scale))),
-                    fill=s_col,
-                    tags="cloud"
-                )
+
+            # Sparkles only when happy / non-sad
+            if not is_sad:
+                sparkle_angles = [0.2, 1.8, 3.4, 4.9]
+                sparkle_chars = ["✦", "✧", "♥", "★"]
+                for s_idx, angle in enumerate(sparkle_angles):
+                    s_dist_x = cloud_half_w + 14 * scale + math.sin(t * 4 + s_idx) * 4
+                    s_dist_y = cloud_half_h + 10 * scale + math.cos(t * 4 + s_idx) * 4
+                    sx = cx + math.cos(angle + t * 0.8) * s_dist_x
+                    sy = cy + math.sin(angle + t * 0.8) * s_dist_y
+                    s_col = letter_colors[(s_idx + int(t * 3)) % len(letter_colors)]
+                    self.canvas.create_text(
+                        sx, sy,
+                        text=sparkle_chars[s_idx % len(sparkle_chars)],
+                        font=("DejaVu Sans", max(7, int(10 * scale))),
+                        fill=s_col,
+                        tags="cloud"
+                    )
 
     def update_animation(self):
         """Main 30 FPS animation update cycle."""
@@ -3076,7 +3775,7 @@ Usage:
     has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
     if has_display:
         try:
-            app = PixelGirlPopup(pixel_size=10, initial_greeting=initial_say, theme=theme_name, enable_sound=sound_enabled, scene=scene_name)
+            app = PixelGirlPopup(pixel_size=10, initial_greeting=initial_say, theme=theme_name, enable_sound=sound_enabled, scene=scene_name, use_llm=True)
             app.run()
             return
         except Exception as e:
