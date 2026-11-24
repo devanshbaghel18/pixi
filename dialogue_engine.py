@@ -22,25 +22,47 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 try:
     from companion_db import (
         DEFAULT_DB_PATH,
+        check_and_unlock_milestones,
+        get_active_pet_name,
         get_state,
         get_stats,
+        get_unlocked_milestones,
         increment_friendship,
         increment_greeting,
         init_db,
+        log_daily_checkin,
         log_interaction,
         set_state,
     )
 except ImportError:
-    from .companion_db import (
-        DEFAULT_DB_PATH,
-        get_state,
-        get_stats,
-        increment_friendship,
-        increment_greeting,
-        init_db,
-        log_interaction,
-        set_state,
-    )
+    try:
+        from .companion_db import (
+            DEFAULT_DB_PATH,
+            check_and_unlock_milestones,
+            get_active_pet_name,
+            get_state,
+            get_stats,
+            get_unlocked_milestones,
+            increment_friendship,
+            increment_greeting,
+            init_db,
+            log_daily_checkin,
+            log_interaction,
+            set_state,
+        )
+    except Exception:
+        DEFAULT_DB_PATH = "companion_data.db"
+        check_and_unlock_milestones = None  # type: ignore
+        get_active_pet_name = None  # type: ignore
+        get_state = None  # type: ignore
+        get_stats = None  # type: ignore
+        get_unlocked_milestones = None  # type: ignore
+        increment_friendship = None  # type: ignore
+        increment_greeting = None  # type: ignore
+        init_db = None  # type: ignore
+        log_daily_checkin = None  # type: ignore
+        log_interaction = None  # type: ignore
+        set_state = None  # type: ignore
 
 try:
     from ml_classifier import MLClassifier, get_classifier
@@ -52,12 +74,14 @@ except ImportError:
         get_classifier = None  # type: ignore
 
 try:
-    from local_llm import LocalLLM, get_local_llm
+    from local_llm import LocalLLM, get_affection_tier_info, get_local_llm
 except ImportError:
     try:
-        from .local_llm import LocalLLM, get_local_llm
+        from .local_llm import LocalLLM, get_affection_tier_info, get_local_llm
     except ImportError:
         LocalLLM = None  # type: ignore
+        get_affection_tier_info = None  # type: ignore
+        get_local_llm = None  # type: ignore
 
 try:
     from sound_synth import SoundType, play_chime
@@ -377,6 +401,7 @@ class DialogueEngine:
         dt: Optional[datetime] = None,
         persist: bool = True,
         play_sound: bool = False,
+        record_checkin: bool = False,
     ) -> Dict[str, Any]:
         """
         Processes an incoming user message:
@@ -461,21 +486,59 @@ class DialogueEngine:
         interaction_id = None
         new_friendship = current_friendship
         new_greetings = current_greetings
+        checkin_info = None
+        newly_unlocked_milestones = []
 
         if persist and self.db_path:
-            # Determine friendship gain: +2 for LOVE/HAPPY, +1 for others
-            f_gain = 2 if emotion in (Emotion.LOVE.value, Emotion.HAPPY.value) else 1
-            new_friendship = increment_friendship(f_gain, db_path=self.db_path)
+            # 1. Optional daily check-in streak tracking
+            if record_checkin and log_daily_checkin is not None:
+                try:
+                    checkin_info = log_daily_checkin(db_path=self.db_path)
+                    # Refresh friendship level if daily checkin gave bonus points
+                    current_friendship = self.get_friendship_level()
+                except Exception:
+                    pass
 
-            if is_greet:
+            # 2. Determine friendship gain: +2 for LOVE/HAPPY, +1 for others
+            f_gain = 2 if emotion in (Emotion.LOVE.value, Emotion.HAPPY.value) else 1
+            if increment_friendship is not None:
+                new_friendship = increment_friendship(f_gain, db_path=self.db_path)
+            else:
+                new_friendship = current_friendship + f_gain
+
+            if is_greet and increment_greeting is not None:
                 new_greetings = increment_greeting(1, db_path=self.db_path)
 
-            interaction_id = log_interaction(
-                user_text=user_text,
-                reply_text=reply,
-                emotion=emotion,
-                db_path=self.db_path,
-            )
+            if log_interaction is not None:
+                interaction_id = log_interaction(
+                    user_text=user_text,
+                    reply_text=reply,
+                    emotion=emotion,
+                    db_path=self.db_path,
+                )
+
+            # 3. Check and unlock affection milestones
+            if check_and_unlock_milestones is not None:
+                try:
+                    newly_unlocked_milestones = check_and_unlock_milestones(
+                        level=new_friendship, db_path=self.db_path
+                    )
+                except Exception:
+                    pass
+
+        # 4. Resolve pet name and affection tier
+        pet_name = "friend"
+        if get_active_pet_name is not None and self.db_path:
+            try:
+                pet_name = get_active_pet_name(friendship_level=new_friendship, db_path=self.db_path)
+            except Exception:
+                pass
+
+        tier_info = (
+            get_affection_tier_info(new_friendship)
+            if get_affection_tier_info is not None
+            else {"tier_name": "Acquaintance", "pet_name": pet_name}
+        )
 
         # Determine suggested sound effect
         if is_greet:
@@ -509,6 +572,10 @@ class DialogueEngine:
             "all_emotion_probs": pred.get("all_emotion_probs", {emotion: emotion_conf}),
             "all_intent_probs": pred.get("all_intent_probs", {intent: intent_conf}),
             "suggested_sound": suggested_sound,
+            "pet_name": pet_name,
+            "affection_tier": tier_info.get("tier_name", "Acquaintance"),
+            "new_milestones": newly_unlocked_milestones,
+            "checkin_info": checkin_info,
         }
 
     def process_message_async(

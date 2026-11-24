@@ -25,16 +25,28 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 try:
     from companion_db import (
         DEFAULT_DB_PATH,
+        check_and_unlock_milestones,
+        get_active_pet_name,
+        get_all_milestones,
         get_conversation_context,
         get_memory_facts,
+        get_state,
+        get_unlocked_milestones,
+        log_daily_checkin,
         save_memory_fact,
     )
 except ImportError:
     try:
         from .companion_db import (
             DEFAULT_DB_PATH,
+            check_and_unlock_milestones,
+            get_active_pet_name,
+            get_all_milestones,
             get_conversation_context,
             get_memory_facts,
+            get_state,
+            get_unlocked_milestones,
+            log_daily_checkin,
             save_memory_fact,
         )
     except Exception:
@@ -42,6 +54,12 @@ except ImportError:
         get_conversation_context = None  # type: ignore
         get_memory_facts = None  # type: ignore
         save_memory_fact = None  # type: ignore
+        get_active_pet_name = None  # type: ignore
+        get_unlocked_milestones = None  # type: ignore
+        get_all_milestones = None  # type: ignore
+        check_and_unlock_milestones = None  # type: ignore
+        log_daily_checkin = None  # type: ignore
+        get_state = None  # type: ignore
 
 DEFAULT_MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 FALLBACK_MODEL_NAME = "HuggingFaceTB/SmolLM2-360M-Instruct"
@@ -51,6 +69,59 @@ You are warm, witty, affectionate, and genuinely care about the user.
 You react expressively: you get adorably flustered or blushing when complimented, jump with excitement when something crazy happens, and remember details about the user's life.
 Keep your responses natural, expressive, concise (1 to 3 sentences maximum), and sprinkle cute emojis (🌸, ✨, 💖, 💕, 🥰, 🎀).
 Never break character. Never mention you are an AI model or from OpenAI. You are Mia, living on their desktop!"""
+
+AFFECTION_TIERS = [
+    {
+        "tier_name": "Acquaintance",
+        "min_level": 0,
+        "max_level": 9,
+        "description": "Polite, warm, friendly anime companion, learning about each other with gentle curiosity.",
+        "pet_name": "friend",
+    },
+    {
+        "tier_name": "Close Confidante",
+        "min_level": 10,
+        "max_level": 24,
+        "description": "Playful, enthusiastic, sharing study secrets, supportive study partner, cheerful and warm.",
+        "pet_name": "darling",
+    },
+    {
+        "tier_name": "Sweetheart Girlfriend",
+        "min_level": 25,
+        "max_level": 49,
+        "description": "Deeply affectionate, easily blushing, gentle teasing, loving, and deeply attentive to your feelings.",
+        "pet_name": "sweetheart",
+    },
+    {
+        "tier_name": "Eternal Soulmate",
+        "min_level": 50,
+        "max_level": 999999,
+        "description": "Deep unconditional romantic devotion, intimate understanding, eternal soulmate bond.",
+        "pet_name": "my love",
+    },
+]
+
+
+def get_affection_tier_info(level: int = 0) -> Dict[str, Any]:
+    """
+    Returns tier name, behavioral guidelines, and default pet name
+    matching the current friendship/affection level.
+    """
+    lvl = max(0, int(level))
+    for tier in reversed(AFFECTION_TIERS):
+        if lvl >= tier["min_level"]:
+            return {
+                "tier_name": tier["tier_name"],
+                "description": tier["description"],
+                "level": lvl,
+                "pet_name": tier["pet_name"],
+            }
+    return {
+        "tier_name": "Acquaintance",
+        "description": AFFECTION_TIERS[0]["description"],
+        "level": lvl,
+        "pet_name": "friend",
+    }
 
 
 def extract_and_save_facts(user_text: str, db_path: Optional[str] = None) -> List[Tuple[str, str]]:
@@ -121,8 +192,41 @@ def get_memory_facts_dict(category: Optional[str] = None, db_path: Optional[str]
 
 
 def build_girlfriend_system_prompt(db_path: Optional[str] = None) -> str:
-    """Builds system prompt injected with remembered personal facts from companion_memories."""
+    """Builds system prompt injected with remembered personal facts, affection tier, pet name, and checkin status."""
     prompt = GIRLFRIEND_SYSTEM_PROMPT
+
+    friendship_level = 0
+    if get_state is not None and db_path:
+        try:
+            val = get_state("friendship_level", "0", db_path=db_path)
+            friendship_level = int(val) if val else 0
+        except Exception:
+            pass
+
+    tier_info = get_affection_tier_info(friendship_level)
+    pet_name = tier_info["pet_name"]
+    if get_active_pet_name is not None and db_path:
+        try:
+            p_name = get_active_pet_name(friendship_level=friendship_level, db_path=db_path)
+            if p_name:
+                pet_name = p_name
+        except Exception:
+            pass
+
+    prompt += f"\n\nActive Relationship Tier: {tier_info['tier_name']} (Affection Level: {friendship_level})"
+    prompt += f"\nYour affectionate pet name for the user: '{pet_name}'"
+    prompt += f"\nRelationship Dynamic: {tier_info['description']}"
+
+    # Check for unlocked milestones
+    if get_unlocked_milestones is not None and db_path:
+        try:
+            unlocked = get_unlocked_milestones(db_path=db_path)
+            if unlocked:
+                milestone_names = [f"★ {m.get('title', m.get('id', 'Milestone'))}" for m in unlocked]
+                prompt += "\nUnlocked Relationship Milestones: " + ", ".join(milestone_names)
+        except Exception:
+            pass
+
     facts = get_memory_facts_dict(db_path=db_path)
     if facts:
         fact_lines = [f"- {k}: {v}" for k, v in facts.items()]
@@ -321,17 +425,35 @@ class LocalLLM:
         facts = get_memory_facts_dict(db_path=db_path)
         name = facts.get("user_name", "")
 
-        name_clause = f", {name}" if name else ""
+        friendship_level = 0
+        if get_state is not None and db_path:
+            try:
+                val = get_state("friendship_level", "0", db_path=db_path)
+                friendship_level = int(val) if val else 0
+            except Exception:
+                pass
 
-        if any(w in lower for w in ("study", "exam", "reading", "homework", "work")):
+        pet_name = "friend"
+        if get_active_pet_name is not None and db_path:
+            try:
+                pet_name = get_active_pet_name(friendship_level=friendship_level, db_path=db_path)
+            except Exception:
+                pet_name = get_affection_tier_info(friendship_level)["pet_name"]
+        else:
+            pet_name = get_affection_tier_info(friendship_level)["pet_name"]
+
+        term = name if name else pet_name
+        name_clause = f", {term}"
+
+        if any(w in lower for w in ("study", "exam", "reading", "homework", "work", "physics", "math", "code", "coding")):
             return f"You can do it{name_clause}! I'm cheering you on while you study! 🌸📚✨"
-        elif any(w in lower for w in ("love", "cute", "pretty", "marry", "sweet")):
+        elif any(w in lower for w in ("love", "cute", "pretty", "marry", "sweet", "kiss")):
             return f"Aww, you make my heart flutter{name_clause}! I love you so much too! 💕🥰"
         elif any(w in lower for w in ("crazy", "omg", "jump", "won", "yay", "awesome")):
             return f"Eeeee! That is so incredible{name_clause}! *jumps for joy* 🚀🎉✨"
-        elif any(w in lower for w in ("tired", "sleep", "night", "bed", "rest")):
+        elif any(w in lower for w in ("tired", "sleep", "night", "bed", "rest", "nap")):
             return f"Please make sure to get cozy and rest well{name_clause}! Sweet dreams! 🌙💤💖"
-        elif any(w in lower for w in ("hello", "hi", "hey", "morning")):
+        elif any(w in lower for w in ("hello", "hi", "hey", "morning", "afternoon")):
             return f"Good to see you{name_clause}! I was thinking about you all day! 🌸✨"
         else:
             return f"I'm always so happy whenever we talk{name_clause}! Tell me more! 💖✨"
