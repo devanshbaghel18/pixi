@@ -524,7 +524,7 @@ class TestCompanionDB(unittest.TestCase):
 
     def test_affection_milestones_initial_state(self):
         """Verifies initial seeded affection milestones and default unlocked state."""
-        init_db(self.db_path)
+        init_db(self.db_path).close()
         all_m = get_all_milestones(db_path=self.db_path)
         self.assertGreaterEqual(len(all_m), 4)
 
@@ -535,7 +535,7 @@ class TestCompanionDB(unittest.TestCase):
 
     def test_check_and_unlock_milestones(self):
         """Tests unlocking milestones progressively as friendship level grows."""
-        init_db(self.db_path)
+        init_db(self.db_path).close()
         
         # Level 5: no new milestone (first is at 10)
         newly = check_and_unlock_milestones(level=5, db_path=self.db_path)
@@ -566,7 +566,7 @@ class TestCompanionDB(unittest.TestCase):
 
     def test_get_active_pet_name(self):
         """Tests pet name progression across affection tiers."""
-        init_db(self.db_path)
+        init_db(self.db_path).close()
         self.assertEqual(get_active_pet_name(friendship_level=0, db_path=self.db_path), "friend")
         self.assertEqual(get_active_pet_name(friendship_level=12, db_path=self.db_path), "darling")
         self.assertEqual(get_active_pet_name(friendship_level=30, db_path=self.db_path), "sweetheart")
@@ -574,7 +574,7 @@ class TestCompanionDB(unittest.TestCase):
 
     def test_daily_checkins_and_streak(self):
         """Tests recording daily checkins, streak incrementation, and bonus awards."""
-        init_db(self.db_path)
+        init_db(self.db_path).close()
         
         # Day 1 checkin
         r1 = log_daily_checkin(checkin_date="2026-11-20", db_path=self.db_path)
