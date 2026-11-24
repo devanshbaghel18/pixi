@@ -36,8 +36,19 @@ __all__ = [
     "log_study_session",
     "get_study_sessions",
     "get_study_stats",
+    "get_study_streak",
+    "set_scene_preference",
+    "get_active_scene",
+    "get_user_scenes",
+    "set_scene",
     "set_scene_setting",
     "get_scene_setting",
+    "check_and_unlock_milestones",
+    "get_unlocked_milestones",
+    "get_all_milestones",
+    "get_active_pet_name",
+    "log_daily_checkin",
+    "get_checkin_stats",
 ]
 
 # ---------------------------------------------------------------------------
@@ -412,6 +423,84 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_scenes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scene_name TEXT NOT NULL UNIQUE,
+                theme_palette TEXT NOT NULL DEFAULT 'Princess Pink',
+                ambient_sound TEXT NOT NULL DEFAULT 'birds',
+                description TEXT,
+                is_active BOOLEAN NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_user_scenes_active
+            ON user_scenes (is_active);
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO user_scenes (scene_name, theme_palette, ambient_sound, description, is_active, created_at, updated_at)
+            VALUES
+                ('Sakura Park', 'Princess Pink', 'birds', 'Cherry blossoms gently floating in the spring breeze', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                ('Cozy Library', 'Golden Sunset', 'rain', 'Warm wooden desks and peaceful quiet study atmosphere', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                ('Midnight Cafe', 'Midnight Violet', 'lofi', 'Dimly lit aesthetic cafe with starry city lights', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS affection_milestones (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                milestone_key TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                level_required INTEGER NOT NULL,
+                description TEXT,
+                pet_name TEXT,
+                unlocked BOOLEAN NOT NULL DEFAULT 0,
+                unlocked_at TEXT,
+                reward_data TEXT
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_milestones_level
+            ON affection_milestones (level_required, unlocked);
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO affection_milestones (milestone_key, title, level_required, description, pet_name, unlocked, unlocked_at, reward_data)
+            VALUES
+                ('TIER_ACQUAINTANCE', 'Friendly Acquaintance', 0, 'You and Mia just met! A budding friendship begins.', 'friend', 1, CURRENT_TIMESTAMP, '{}'),
+                ('TIER_CLOSE_FRIEND', 'Close Confidante', 10, 'Mia shares secrets and trusts you deeply.', 'darling', 0, NULL, '{"bonus_multiplier": 1.2}'),
+                ('TIER_GIRLFRIEND', 'Sweetheart & Girlfriend', 25, 'Romantic affection blossoms; Mia blushes when you talk.', 'sweetheart', 0, NULL, '{"bonus_multiplier": 1.5, "special_hearts": true}'),
+                ('TIER_SOULMATE', 'Eternal Soulmate', 50, 'An unbreakable romantic bond; Mia loves you with all her heart.', 'my love', 0, NULL, '{"bonus_multiplier": 2.0, "soulmate_aura": true}'),
+                ('STREAK_MASTER', 'Focus Streak Master', 7, 'Completed 7 days of study together.', 'study hero', 0, NULL, '{"study_buff": true}');
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS daily_checkins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                checkin_date TEXT NOT NULL UNIQUE,
+                consecutive_days INTEGER NOT NULL DEFAULT 1,
+                bonus_points INTEGER NOT NULL DEFAULT 2,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_checkins_date
+            ON daily_checkins (checkin_date);
             """
         )
         conn.execute(
@@ -1159,6 +1248,116 @@ def get_study_stats(
             conn.close()
 
 
+def get_study_streak(
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> int:
+    """Returns current consecutive daily study streak count."""
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        return int(get_state("study_streak_days", "0", db_path=conn))
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_active_scene(
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> Dict[str, Any]:
+    """Retrieves the currently active user scene."""
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        row = conn.execute(
+            "SELECT * FROM user_scenes WHERE is_active = 1 LIMIT 1;"
+        ).fetchone()
+        if row:
+            return dict(row)
+        return {
+            "scene_name": "Sakura Park",
+            "theme_palette": "Princess Pink",
+            "ambient_sound": "birds",
+            "description": "Cherry blossoms gently floating in the spring breeze",
+            "is_active": 1,
+        }
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_user_scenes(
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> List[Dict[str, Any]]:
+    """Returns all available user scenes."""
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        rows = conn.execute(
+            "SELECT * FROM user_scenes ORDER BY id ASC;"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        if should_close:
+            conn.close()
+
+
+def set_scene(
+    scene_name: str,
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> bool:
+    """Sets active scene in user_scenes and updates scene_settings table."""
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        with conn:
+            row = conn.execute(
+                "SELECT id FROM user_scenes WHERE scene_name = ?;",
+                (scene_name.strip(),),
+            ).fetchone()
+            if not row:
+                return False
+            conn.execute("UPDATE user_scenes SET is_active = 0;")
+            conn.execute(
+                "UPDATE user_scenes SET is_active = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?;",
+                (row["id"],),
+            )
+            set_scene_setting("current_scene", scene_name.strip(), db_path=conn)
+        return True
+    finally:
+        if should_close:
+            conn.close()
+
+
+def set_scene_preference(
+    scene_name: str,
+    theme_palette: str,
+    ambient_sound: str,
+    description: str = "",
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> None:
+    """Inserts or updates custom user scene configuration."""
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        now_str = datetime.now(timezone.utc).isoformat()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO user_scenes (scene_name, theme_palette, ambient_sound, description, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 0, ?, ?)
+                ON CONFLICT(scene_name) DO UPDATE SET
+                    theme_palette = excluded.theme_palette,
+                    ambient_sound = excluded.ambient_sound,
+                    description = excluded.description,
+                    updated_at = excluded.updated_at;
+                """,
+                (scene_name.strip(), theme_palette.strip(), ambient_sound.strip(), description.strip(), now_str, now_str),
+            )
+    finally:
+        if should_close:
+            conn.close()
+
+
 def set_scene_setting(
     key: str,
     value: str,
@@ -1204,6 +1403,221 @@ def get_scene_setting(
             conn.close()
 
 
+def check_and_unlock_milestones(
+    level: Optional[int] = None,
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> List[Dict[str, Any]]:
+    """
+    Checks for any affection milestones whose level requirement is met,
+    marks them as unlocked with timestamp, and returns list of newly unlocked milestones.
+    """
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        if level is None:
+            lvl_str = get_state("friendship_level", "0", db_path=conn)
+            current_level = int(lvl_str)
+        else:
+            current_level = int(level)
+
+        newly_unlocked = []
+        with conn:
+            cursor = conn.execute(
+                """
+                SELECT * FROM affection_milestones
+                WHERE level_required <= ? AND unlocked = 0
+                ORDER BY level_required ASC;
+                """,
+                (current_level,),
+            )
+            rows = cursor.fetchall()
+            now_iso = datetime.now(timezone.utc).isoformat()
+            for r in rows:
+                conn.execute(
+                    """
+                    UPDATE affection_milestones
+                    SET unlocked = 1, unlocked_at = ?
+                    WHERE id = ?;
+                    """,
+                    (now_iso, r["id"]),
+                )
+                item = dict(r)
+                item["unlocked"] = 1
+                item["unlocked_at"] = now_iso
+                newly_unlocked.append(item)
+
+        return newly_unlocked
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_unlocked_milestones(
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> List[Dict[str, Any]]:
+    """Returns all unlocked milestones in ascending level order."""
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        cursor = conn.execute(
+            """
+            SELECT * FROM affection_milestones
+            WHERE unlocked = 1
+            ORDER BY level_required ASC;
+            """
+        )
+        return [dict(r) for r in cursor.fetchall()]
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_all_milestones(
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> List[Dict[str, Any]]:
+    """Returns all affection milestones (both locked and unlocked)."""
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        cursor = conn.execute(
+            """
+            SELECT * FROM affection_milestones
+            ORDER BY level_required ASC;
+            """
+        )
+        return [dict(r) for r in cursor.fetchall()]
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_active_pet_name(
+    friendship_level: Optional[int] = None,
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> str:
+    """
+    Returns an endearing pet name matching the user's active affection tier.
+    Falls back gracefully to 'friend' if level is low.
+    """
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        if friendship_level is None:
+            lvl_str = get_state("friendship_level", "0", db_path=conn)
+            level = int(lvl_str)
+        else:
+            level = int(friendship_level)
+
+        if level >= 50:
+            return "my love"
+        elif level >= 25:
+            return "sweetheart"
+        elif level >= 10:
+            return "darling"
+        elif level >= 5:
+            return "friend"
+        else:
+            return "friend"
+    finally:
+        if should_close:
+            conn.close()
+
+
+def log_daily_checkin(
+    checkin_date: Optional[str] = None,
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> Dict[str, Any]:
+    """
+    Records daily check-in with Mia.
+    Calculates consecutive check-in streak and awards friendship points (+2 base, +5 if streak >= 3).
+    """
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        now = datetime.now(timezone.utc)
+        today_str = checkin_date or now.strftime("%Y-%m-%d")
+
+        with conn:
+            existing = conn.execute(
+                "SELECT * FROM daily_checkins WHERE checkin_date = ?;",
+                (today_str,),
+            ).fetchone()
+            if existing:
+                return {
+                    "already_checked_in": True,
+                    "consecutive_days": existing["consecutive_days"],
+                    "bonus_points": existing["bonus_points"],
+                }
+
+            yesterday_str = (datetime.strptime(today_str, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+            prev = conn.execute(
+                "SELECT consecutive_days FROM daily_checkins WHERE checkin_date = ?;",
+                (yesterday_str,),
+            ).fetchone()
+
+            streak = (prev["consecutive_days"] + 1) if prev else 1
+            bonus = 5 if streak >= 3 else 2
+
+            conn.execute(
+                """
+                INSERT INTO daily_checkins (checkin_date, consecutive_days, bonus_points, created_at)
+                VALUES (?, ?, ?, ?);
+                """,
+                (today_str, streak, bonus, now.isoformat()),
+            )
+
+            increment_friendship(bonus, db_path=conn)
+            check_and_unlock_milestones(db_path=conn)
+
+            return {
+                "already_checked_in": False,
+                "consecutive_days": streak,
+                "bonus_points": bonus,
+            }
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_checkin_stats(
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> Dict[str, Any]:
+    """Returns aggregate check-in statistics: total check-ins, max streak, and last check-in date."""
+    conn, should_close = get_connection(db_path)
+    try:
+        _ensure_schema(conn)
+        row = conn.execute(
+            """
+            SELECT 
+                COUNT(*) AS total_checkins,
+                MAX(consecutive_days) AS max_streak,
+                MAX(checkin_date) AS last_checkin
+            FROM daily_checkins;
+            """
+        ).fetchone()
+
+        latest = conn.execute(
+            """
+            SELECT consecutive_days, checkin_date
+            FROM daily_checkins
+            ORDER BY checkin_date DESC
+            LIMIT 1;
+            """
+        ).fetchone()
+
+        current_streak = latest["consecutive_days"] if latest else 0
+
+        return {
+            "total_checkins": row["total_checkins"] or 0,
+            "max_streak": row["max_streak"] or 0,
+            "current_streak": current_streak,
+            "last_checkin_date": row["last_checkin"] or "",
+        }
+    finally:
+        if should_close:
+            conn.close()
+
+
 def clear_db(
     db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
 ) -> None:
@@ -1222,6 +1636,9 @@ def clear_db(
             conn.execute("DELETE FROM companion_memories;")
             conn.execute("DELETE FROM study_sessions;")
             conn.execute("DELETE FROM scene_settings;")
+            conn.execute("DELETE FROM daily_checkins;")
+            conn.execute("UPDATE affection_milestones SET unlocked = 0, unlocked_at = NULL WHERE milestone_key != 'TIER_ACQUAINTANCE';")
+            conn.execute("UPDATE affection_milestones SET unlocked = 1 WHERE milestone_key = 'TIER_ACQUAINTANCE';")
             conn.execute(
                 "INSERT INTO companion_state (key, value) VALUES "
                 "('friendship_level', '0'), "
