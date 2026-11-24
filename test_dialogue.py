@@ -251,6 +251,21 @@ class TestDialogueEngineContextAndDB(unittest.TestCase):
         self.assertTrue(res["is_greeting"])
         self.assertIsNotNone(res["reply_text"])
 
+    def test_sad_emotion_scolding_and_boundaries(self):
+        """Harsh commands, scolding, or venting trigger SAD emotion and 0 friendship gain."""
+        self.assertEqual(classify_emotion("shut up!"), Emotion.SAD.value)
+        self.assertEqual(classify_emotion("Please be quiet"), Emotion.SAD.value)
+        self.assertEqual(classify_emotion("leave me alone"), Emotion.SAD.value)
+        self.assertEqual(classify_emotion("I had a terrible day today"), Emotion.SAD.value)
+
+        initial_level = self.engine.get_friendship_level()
+        res = self.engine.process_message("shut up!")
+        self.assertEqual(res["emotion"], Emotion.SAD.value)
+        self.assertEqual(res["friendship_level"], initial_level)  # 0 gain
+        self.assertEqual(res["suggested_sound"], "CLICK")
+        reply_lower = res["reply_text"].lower()
+        self.assertTrue(any(w in reply_lower for w in ("quiet", "space", "sorry", "fine", "bother")))
+
 
 if __name__ == "__main__":
     unittest.main()

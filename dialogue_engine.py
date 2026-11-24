@@ -23,6 +23,7 @@ try:
     from companion_db import (
         DEFAULT_DB_PATH,
         check_and_unlock_milestones,
+        clear_conversation_history,
         get_active_pet_name,
         get_state,
         get_stats,
@@ -39,6 +40,7 @@ except ImportError:
         from .companion_db import (
             DEFAULT_DB_PATH,
             check_and_unlock_milestones,
+            clear_conversation_history,
             get_active_pet_name,
             get_state,
             get_stats,
@@ -53,6 +55,7 @@ except ImportError:
     except Exception:
         DEFAULT_DB_PATH = "companion_data.db"
         check_and_unlock_milestones = None  # type: ignore
+        clear_conversation_history = None  # type: ignore
         get_active_pet_name = None  # type: ignore
         get_state = None  # type: ignore
         get_stats = None  # type: ignore
@@ -100,12 +103,18 @@ class Emotion(str, Enum):
     SHY = "SHY"
     LOVE = "LOVE"
     NORMAL = "NORMAL"
+    SAD = "SAD"
 
 
 VALID_EMOTIONS = tuple(e.value for e in Emotion)
 
 # Regex patterns for emotions (ordered by specificity and priority)
 EMOTION_PATTERNS = {
+    Emotion.SAD: [
+        r"\b(shut\s*up|be\s+quiet|stop\s+talking|leave\s+me\s+alone|go\s+away|annoying|hate\s+you|piss\s+off|get\s+lost|fuck\s+off|jerk|mean|stupid|shut\s+your\s+mouth)\b",
+        r"\b(sad|crying|depressed|unhappy|heartbroken|terrible\s+day|awful\s+day|horrible\s+day|grief|hurts|lonely)\b",
+        r"(:\(|😢|😭|💔|😞|😔)",
+    ],
     Emotion.LOVE: [
         r"\b(love|marry|kiss|cute|adorable|sweetheart|darling|beautiful|pretty|gorgeous|heart|crush|precious|ilu|ily|sweetie|bae)\b",
         r"[♥❤💕💖💗💓💘]",
@@ -175,6 +184,11 @@ EMOTION_RESPONSES = {
         "That's wonderful news! Let's celebrate together! 🎉💖",
         "Woohoo! Sending you the biggest pixel high-five! 🌸🙌",
     ],
+    Emotion.SAD: [
+        "...Oh. I'm sorry. I'll be quiet then.",
+        "Ouch... okay, I'll give you some space.",
+        "...Fine. I won't bother you then.",
+    ],
     Emotion.NORMAL: [
         "I'm listening! Tell me more! 🌸",
         "Always happy to chat with you! ✨",
@@ -186,6 +200,7 @@ EMOTION_RESPONSES = {
 def classify_emotion(text: str) -> str:
     """
     Classifies the emotion of a user message into one of:
+      - 'SAD' (scolding, harsh, sadness)
       - 'LOVE'
       - 'SHY'
       - 'PLAYFUL'
@@ -197,7 +212,12 @@ def classify_emotion(text: str) -> str:
 
     clean = text.strip().lower()
 
-    # Precedence: LOVE -> SHY -> PLAYFUL -> HAPPY -> NORMAL
+    # Precedence: SAD -> LOVE -> SHY -> PLAYFUL -> HAPPY -> NORMAL
+    if Emotion.SAD in EMOTION_PATTERNS:
+        for pat in EMOTION_PATTERNS[Emotion.SAD]:
+            if re.search(pat, clean):
+                return Emotion.SAD.value
+
     for pat in EMOTION_PATTERNS[Emotion.LOVE]:
         if re.search(pat, clean):
             return Emotion.LOVE.value
@@ -311,6 +331,12 @@ class DialogueEngine:
             return 0
         val = get_state("greeting_count", "0", db_path=self.db_path)
         return int(val) if val else 0
+
+    def clear_history(self) -> int:
+        """Permanently clears all conversation records from the database."""
+        if self.db_path and clear_conversation_history is not None:
+            return clear_conversation_history(db_path=self.db_path)
+        return 0
 
     def _select_greeting_response(
         self, user_text: str, dt: Optional[datetime] = None
@@ -444,8 +470,11 @@ class DialogueEngine:
         ml_int_conf = pred.get("intent_confidence", 0.0)
         method = pred.get("method", "heuristic")
 
-        # Determine emotion: ML if confident/trained, regex fallback/corroboration
-        if ml_emotion and ml_emotion != Emotion.NORMAL.value:
+        # Determine emotion: prioritize explicit SAD / boundary detection, then ML, then regex fallback
+        if reg_emotion == Emotion.SAD.value:
+            emotion = Emotion.SAD.value
+            emotion_conf = 0.95
+        elif ml_emotion and ml_emotion != Emotion.NORMAL.value:
             emotion = ml_emotion
             emotion_conf = ml_emo_conf
         elif reg_emotion != Emotion.NORMAL.value:
@@ -456,9 +485,14 @@ class DialogueEngine:
             emotion_conf = ml_emo_conf if ml_emotion else 1.0
 
         # Determine greeting / intent
-        is_greet = reg_is_greet or (ml_intent == "GREETING")
-        intent = ml_intent or ("GREETING" if is_greet else "CHAT")
-        intent_conf = ml_int_conf if ml_intent else (0.95 if is_greet else 0.70)
+        if emotion == Emotion.SAD.value:
+            is_greet = False
+            intent = "CHAT"
+            intent_conf = 0.95
+        else:
+            is_greet = reg_is_greet or (ml_intent == "GREETING" and ml_int_conf >= 0.60)
+            intent = ml_intent if ml_int_conf >= 0.50 else ("GREETING" if is_greet else "CHAT")
+            intent_conf = ml_int_conf if ml_intent else (0.95 if is_greet else 0.70)
 
         tod = get_time_of_day(dt)
 
@@ -467,9 +501,12 @@ class DialogueEngine:
 
         # Attempt neural generation via Local LLM if enabled and available
         reply = None
+        source = "heuristic"
         if self.use_llm and self.llm and self.llm.is_available():
             try:
                 reply = self.llm.generate_reply(user_text, db_path=self.db_path)
+                if reply:
+                    source = "llm"
             except Exception:
                 reply = None
 
@@ -482,6 +519,8 @@ class DialogueEngine:
                 dt=dt,
                 friendship_level=current_friendship,
             )
+            if self.use_llm:
+                source = "fallback"
 
         interaction_id = None
         new_friendship = current_friendship
@@ -499,8 +538,8 @@ class DialogueEngine:
                 except Exception:
                     pass
 
-            # 2. Determine friendship gain: +2 for LOVE/HAPPY, +1 for others
-            f_gain = 2 if emotion in (Emotion.LOVE.value, Emotion.HAPPY.value) else 1
+            # 2. Determine friendship gain: +2 for LOVE/HAPPY, 0 for SAD/harsh, +1 for others
+            f_gain = 0 if emotion == Emotion.SAD.value else (2 if emotion in (Emotion.LOVE.value, Emotion.HAPPY.value) else 1)
             if increment_friendship is not None:
                 new_friendship = increment_friendship(f_gain, db_path=self.db_path)
             else:
@@ -541,11 +580,13 @@ class DialogueEngine:
         )
 
         # Determine suggested sound effect
-        if is_greet:
+        if emotion == Emotion.SAD.value:
+            suggested_sound = "CLICK"
+        elif is_greet:
             suggested_sound = "GREETING"
         elif emotion in (Emotion.LOVE.value, Emotion.SHY.value):
             suggested_sound = "BLUSH"
-        elif emotion in (Emotion.HAPPY.value, Emotion.PLAYFUL.value) or "!" in user_text:
+        elif emotion in (Emotion.HAPPY.value, Emotion.PLAYFUL.value) or ("!" in user_text and emotion != Emotion.SAD.value):
             suggested_sound = "JUMP"
         else:
             suggested_sound = "CLICK"
@@ -559,6 +600,8 @@ class DialogueEngine:
         return {
             "user_text": user_text,
             "reply_text": reply,
+            "source": source,
+            "llm_status": getattr(self.llm, "status", "disabled") if self.llm else "disabled",
             "emotion": emotion,
             "emotion_confidence": round(float(emotion_conf), 4),
             "intent": intent,
@@ -582,20 +625,59 @@ class DialogueEngine:
         self,
         user_text: str,
         callback: Callable[[Dict[str, Any]], None],
+        on_token: Optional[Callable[[str], None]] = None,
+        on_start: Optional[Callable[[], None]] = None,
+        on_error: Optional[Callable[[Exception], None]] = None,
         dt: Optional[datetime] = None,
         persist: bool = True,
     ) -> threading.Thread:
         """
         Runs process_message on a background thread and invokes callback(result) on completion.
+        Optionally streams tokens via on_token callback if provided.
         Ensures desktop GUI or CLI never experiences UI latency.
         """
         def _worker():
+            if on_start:
+                try:
+                    on_start()
+                except Exception:
+                    pass
+
             try:
-                res = self.process_message(user_text, dt=dt, persist=persist)
+                # If streaming requested and LLM is active and available
+                if on_token is not None and self.use_llm and self.llm and self.llm.is_available():
+                    full_reply = ""
+                    try:
+                        gen = self.llm.generate_reply_stream(user_text, db_path=self.db_path)
+                        for token in gen:
+                            full_reply += token
+                            try:
+                                on_token(token)
+                            except Exception:
+                                pass
+                    except Exception as gen_err:
+                        full_reply = ""
+
+                    if full_reply:
+                        # Process rest of message metadata with generated reply
+                        res = self.process_message(user_text, dt=dt, persist=persist)
+                        res["reply_text"] = full_reply
+                        res["source"] = "llm"
+                    else:
+                        res = self.process_message(user_text, dt=dt, persist=persist)
+                else:
+                    res = self.process_message(user_text, dt=dt, persist=persist)
             except Exception as e:
+                if on_error:
+                    try:
+                        on_error(e)
+                    except Exception:
+                        pass
                 res = {
                     "user_text": user_text,
                     "reply_text": f"I'm right here with you! 🌸 ({e})",
+                    "source": "error",
+                    "llm_status": getattr(self.llm, "status", "unavailable") if self.llm else "disabled",
                     "emotion": Emotion.NORMAL.value,
                     "emotion_confidence": 0.5,
                     "intent": "CHAT",
@@ -608,6 +690,11 @@ class DialogueEngine:
                     "method": "fallback",
                     "all_emotion_probs": {},
                     "all_intent_probs": {},
+                    "suggested_sound": "CLICK",
+                    "pet_name": "friend",
+                    "affection_tier": "Acquaintance",
+                    "new_milestones": [],
+                    "checkin_info": None,
                 }
             try:
                 callback(res)

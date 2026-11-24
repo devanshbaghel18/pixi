@@ -6,6 +6,7 @@ machine learning dataset samples, and model run metrics.
 """
 
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -33,6 +34,7 @@ __all__ = [
     "save_memory_fact",
     "get_memory_facts",
     "get_conversation_context",
+    "clear_conversation_history",
     "log_study_session",
     "get_study_sessions",
     "get_study_stats",
@@ -1067,13 +1069,91 @@ def get_memory_facts(
             conn.close()
 
 
+def truncate_conversation_tokens(
+    messages: List[Dict[str, str]],
+    max_tokens: int = 6000,
+) -> List[Dict[str, str]]:
+    """
+    Trims oldest messages from the beginning of conversation history so that
+    total estimated token count remains strictly within max_tokens budget.
+    Preserves recent context coherency.
+    """
+    if not messages:
+        return []
+
+    # Rough estimation: 1 token ~= 3.5 characters
+    def estimate_tokens(msg: Dict[str, str]) -> int:
+        return max(1, int(len(msg.get("content", "")) / 3.5) + 4)
+
+    total_tokens = sum(estimate_tokens(m) for m in messages)
+    if total_tokens <= max_tokens:
+        return list(messages)
+
+    trimmed = list(messages)
+    while trimmed and total_tokens > max_tokens:
+        removed = trimmed.pop(0)
+        total_tokens -= estimate_tokens(removed)
+
+    return trimmed
+
+
+def get_relevant_memories(
+    query: str,
+    limit: int = 5,
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> List[Dict[str, Any]]:
+    """
+    Retrieves facts from companion_memories that are most relevant to the query.
+    Performs keyword relevance matching against keys, values, and categories.
+    """
+    all_facts = get_memory_facts(db_path=db_path)
+    if not all_facts:
+        return []
+
+    if not query or not query.strip():
+        return all_facts[:limit]
+
+    # Extract keywords from query
+    q_words = set(re.findall(r"\b[a-zA-Z0-9_-]{3,}\b", query.lower()))
+    if not q_words:
+        return all_facts[:limit]
+
+    scored = []
+    for fact in all_facts:
+        score = 0
+        k = fact.get("key", "").lower()
+        v = fact.get("value", "").lower()
+        c = fact.get("category", "").lower()
+
+        # Check keyword matches
+        for w in q_words:
+            if w in k:
+                score += 3
+            if w in v:
+                score += 2
+            if w in c:
+                score += 1
+
+        if score > 0:
+            scored.append((score, fact))
+
+    if scored:
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [item[1] for item in scored[:limit]]
+
+    # If no explicit keyword hit, return most recent facts
+    return all_facts[:limit]
+
+
 def get_conversation_context(
     limit: int = 8,
     db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+    max_tokens: Optional[int] = None,
 ) -> List[Dict[str, str]]:
     """
     Retrieves the most recent interactions formatted for conversational LLM chat context.
     Returns list of {'role': 'user' | 'assistant', 'content': str} in chronological order.
+    Optionally truncates context to max_tokens budget.
     """
     conn, should_close = get_connection(db_path)
     try:
@@ -1098,7 +1178,28 @@ def get_conversation_context(
                 messages.append({"role": "user", "content": r["user_text"]})
             if r["reply_text"]:
                 messages.append({"role": "assistant", "content": r["reply_text"]})
+
+        if max_tokens is not None and max_tokens > 0:
+            messages = truncate_conversation_tokens(messages, max_tokens=max_tokens)
+
         return messages
+    finally:
+        if should_close:
+            conn.close()
+
+
+def clear_conversation_history(
+    db_path: Union[str, sqlite3.Connection] = DEFAULT_DB_PATH,
+) -> int:
+    """
+    Deletes all logged conversations from the interactions table.
+    Returns the count of deleted interaction rows.
+    """
+    conn, should_close = get_connection(db_path)
+    try:
+        cur = conn.execute("DELETE FROM interactions")
+        conn.commit()
+        return cur.rowcount
     finally:
         if should_close:
             conn.close()
