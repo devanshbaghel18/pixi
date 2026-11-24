@@ -37,6 +37,17 @@ from companion_db import (
     get_study_stats,
     set_scene_setting,
     get_scene_setting,
+    check_and_unlock_milestones,
+    get_unlocked_milestones,
+    get_all_milestones,
+    get_active_pet_name,
+    log_daily_checkin,
+    get_checkin_stats,
+    get_user_scenes,
+    get_active_scene,
+    set_scene,
+    set_scene_preference,
+    get_study_streak,
 )
 
 
@@ -510,6 +521,121 @@ class TestCompanionDB(unittest.TestCase):
         # Update to Cozy Study
         set_scene_setting("current_scene", "Cozy Study", db_path=self.db_path)
         self.assertEqual(get_scene_setting("current_scene", db_path=self.db_path), "Cozy Study")
+
+    def test_affection_milestones_initial_state(self):
+        """Verifies initial seeded affection milestones and default unlocked state."""
+        init_db(self.db_path)
+        all_m = get_all_milestones(db_path=self.db_path)
+        self.assertGreaterEqual(len(all_m), 4)
+
+        unlocked = get_unlocked_milestones(db_path=self.db_path)
+        self.assertEqual(len(unlocked), 1)
+        self.assertEqual(unlocked[0]["milestone_key"], "TIER_ACQUAINTANCE")
+        self.assertEqual(unlocked[0]["level_required"], 0)
+
+    def test_check_and_unlock_milestones(self):
+        """Tests unlocking milestones progressively as friendship level grows."""
+        init_db(self.db_path)
+        
+        # Level 5: no new milestone (first is at 10)
+        newly = check_and_unlock_milestones(level=5, db_path=self.db_path)
+        self.assertEqual(len(newly), 0)
+
+        # Level 12: unlocks STREAK_MASTER (req: 7) and TIER_CLOSE_FRIEND (req: 10)
+        newly = check_and_unlock_milestones(level=12, db_path=self.db_path)
+        self.assertEqual(len(newly), 2)
+        keys = [m["milestone_key"] for m in newly]
+        self.assertIn("STREAK_MASTER", keys)
+        self.assertIn("TIER_CLOSE_FRIEND", keys)
+        self.assertIsNotNone(newly[0]["unlocked_at"])
+
+        # Running again at level 12 returns empty (already unlocked)
+        again = check_and_unlock_milestones(level=12, db_path=self.db_path)
+        self.assertEqual(len(again), 0)
+
+        # Level 60: unlocks TIER_GIRLFRIEND (req: 25) and TIER_SOULMATE (req: 50)
+        newly_big = check_and_unlock_milestones(level=60, db_path=self.db_path)
+        self.assertEqual(len(newly_big), 2)
+        keys = [m["milestone_key"] for m in newly_big]
+        self.assertIn("TIER_GIRLFRIEND", keys)
+        self.assertIn("TIER_SOULMATE", keys)
+
+        # Total unlocked should now be 5
+        all_unlocked = get_unlocked_milestones(db_path=self.db_path)
+        self.assertEqual(len(all_unlocked), 5)
+
+    def test_get_active_pet_name(self):
+        """Tests pet name progression across affection tiers."""
+        init_db(self.db_path)
+        self.assertEqual(get_active_pet_name(friendship_level=0, db_path=self.db_path), "friend")
+        self.assertEqual(get_active_pet_name(friendship_level=12, db_path=self.db_path), "darling")
+        self.assertEqual(get_active_pet_name(friendship_level=30, db_path=self.db_path), "sweetheart")
+        self.assertEqual(get_active_pet_name(friendship_level=55, db_path=self.db_path), "my love")
+
+    def test_daily_checkins_and_streak(self):
+        """Tests recording daily checkins, streak incrementation, and bonus awards."""
+        init_db(self.db_path)
+        
+        # Day 1 checkin
+        r1 = log_daily_checkin(checkin_date="2026-11-20", db_path=self.db_path)
+        self.assertFalse(r1["already_checked_in"])
+        self.assertEqual(r1["consecutive_days"], 1)
+        self.assertEqual(r1["bonus_points"], 2)
+        self.assertEqual(get_stats(db_path=self.db_path)["friendship_level"], 2)
+
+        # Same day duplicate checkin
+        r1_dup = log_daily_checkin(checkin_date="2026-11-20", db_path=self.db_path)
+        self.assertTrue(r1_dup["already_checked_in"])
+        self.assertEqual(r1_dup["consecutive_days"], 1)
+        # Friendship should not increment again on same day
+        self.assertEqual(get_stats(db_path=self.db_path)["friendship_level"], 2)
+
+        # Day 2 consecutive checkin
+        r2 = log_daily_checkin(checkin_date="2026-11-21", db_path=self.db_path)
+        self.assertFalse(r2["already_checked_in"])
+        self.assertEqual(r2["consecutive_days"], 2)
+        self.assertEqual(r2["bonus_points"], 2)
+        self.assertEqual(get_stats(db_path=self.db_path)["friendship_level"], 4)
+
+        # Day 3 consecutive checkin (streak >= 3 awards +5 bonus points!)
+        r3 = log_daily_checkin(checkin_date="2026-11-22", db_path=self.db_path)
+        self.assertFalse(r3["already_checked_in"])
+        self.assertEqual(r3["consecutive_days"], 3)
+        self.assertEqual(r3["bonus_points"], 5)
+        self.assertEqual(get_stats(db_path=self.db_path)["friendship_level"], 9)
+
+        # Check stats
+        stats = get_checkin_stats(db_path=self.db_path)
+        self.assertEqual(stats["total_checkins"], 3)
+        self.assertEqual(stats["max_streak"], 3)
+        self.assertEqual(stats["current_streak"], 3)
+        self.assertEqual(stats["last_checkin_date"], "2026-11-22")
+
+    def test_user_scenes_and_study_streak(self):
+        """Verifies user_scenes CRUD, active scene switching, and study streak getter."""
+        init_db(self.db_path)
+        scenes = get_user_scenes(db_path=self.db_path)
+        self.assertGreaterEqual(len(scenes), 3)
+
+        active = get_active_scene(db_path=self.db_path)
+        self.assertEqual(active["scene_name"], "Sakura Park")
+
+        # Switch scene to Midnight Cafe
+        res = set_scene("Midnight Cafe", db_path=self.db_path)
+        self.assertTrue(res)
+        active_new = get_active_scene(db_path=self.db_path)
+        self.assertEqual(active_new["scene_name"], "Midnight Cafe")
+
+        # Add custom scene
+        set_scene_preference("Rooftop Garden", "Golden Sunset", "wind", "Sunset garden", db_path=self.db_path)
+        res_custom = set_scene("Rooftop Garden", db_path=self.db_path)
+        self.assertTrue(res_custom)
+        active_custom = get_active_scene(db_path=self.db_path)
+        self.assertEqual(active_custom["scene_name"], "Rooftop Garden")
+
+        # Streak getter
+        streak = get_study_streak(db_path=self.db_path)
+        self.assertEqual(streak, 0)
 
 
 if __name__ == "__main__":
