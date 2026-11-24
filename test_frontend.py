@@ -298,7 +298,7 @@ class TestActionSystemAndAnimationOverhaul(unittest.TestCase):
 
     def test_build_frame_dimensions(self):
         """Every built frame must maintain exact 47 rows × 40 columns across all facial and body states."""
-        faces = ["OPEN", "BLINK", "HALF", "HAPPY", "EXCITED", "BLUSH"]
+        faces = ["OPEN", "BLINK", "HALF", "HAPPY", "EXCITED", "BLUSH", "SLEEPING", "KISS"]
         for face in faces:
             frame = build_frame(face_type=face)
             self.assertEqual(len(frame), 47, f"Face {face} invalid row count")
@@ -326,14 +326,20 @@ class TestActionSystemAndAnimationOverhaul(unittest.TestCase):
         self.assertEqual(frame[45].strip(), "")
 
     def test_action_state_constants_and_valid_actions(self):
-        """ActionState must define IDLE, WAVING, JUMPING, BLUSHING, and CELEBRATING."""
+        """ActionState must define IDLE, WAVING, JUMPING, BLUSHING, CELEBRATING, SLEEPING, KISSING, and DANCING."""
         self.assertEqual(ActionState.IDLE, "IDLE")
         self.assertEqual(ActionState.WAVING, "WAVING")
         self.assertEqual(ActionState.JUMPING, "JUMPING")
         self.assertEqual(ActionState.BLUSHING, "BLUSHING")
         self.assertEqual(ActionState.CELEBRATING, "CELEBRATING")
+        self.assertEqual(ActionState.SLEEPING, "SLEEPING")
+        self.assertEqual(ActionState.KISSING, "KISSING")
+        self.assertEqual(ActionState.DANCING, "DANCING")
 
-        expected = ("IDLE", "WAVING", "JUMPING", "BLUSHING", "CELEBRATING")
+        expected = (
+            "IDLE", "WAVING", "JUMPING", "BLUSHING", "CELEBRATING",
+            "SLEEPING", "KISSING", "DANCING"
+        )
         for state in expected:
             self.assertIn(state, VALID_ACTIONS)
 
@@ -514,7 +520,7 @@ class TestInteractiveScenesAndEnvironments(unittest.TestCase):
 
     def test_scenes_dictionary_and_data(self):
         """Verifies SCENES definitions and get_scene_data fallback."""
-        expected = ["Sakura Park", "Midnight Stars", "Cozy Study"]
+        expected = ["Sakura Park", "Midnight Stars", "Cozy Study", "Sunset Beach", "Rooftop Night"]
         for scene_name in expected:
             self.assertIn(scene_name, SCENES)
             data = get_scene_data(scene_name)
@@ -721,6 +727,93 @@ class TestProceduralSoundSynthesizerWiring(unittest.TestCase):
 
         self.app.set_theme("Midnight Violet")
         self.assertIn("CLICK", recorded_sounds)
+
+
+class TestExtendedActionsAndAtmospheres(unittest.TestCase):
+    """Tests extended animations (SLEEPING, KISSING, DANCING) and atmospheric scenes (Sunset Beach, Rooftop Night)."""
+
+    def setUp(self):
+        import tkinter as tk
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            root.destroy()
+        except Exception:
+            self.skipTest("Tkinter display not available")
+
+        self.app = PixelGirlPopup(pixel_size=4, initial_greeting=False, enable_sound=False)
+        self.app.root.withdraw()
+
+    def tearDown(self):
+        if self.app and self.app.root:
+            self.app.root.destroy()
+
+    def test_build_frame_extended_faces(self):
+        """Verifies build_frame supports SLEEPING and KISS face types."""
+        frame_sleep = build_frame(face_type="SLEEPING")
+        self.assertEqual(len(frame_sleep), 47)
+        self.assertIn("sSEEEsSSSSsEEEs", "".join(frame_sleep))
+
+        frame_kiss = build_frame(face_type="KISS")
+        self.assertEqual(len(frame_kiss), 47)
+        self.assertIn("OBBBBBsBBsBBBBB", "".join(frame_kiss))
+
+    def test_extended_actions_and_buttons(self):
+        """Tests triggering SLEEPING, KISSING, and DANCING actions and their particle systems."""
+        # 1. KISSING
+        self.assertTrue(self.app.trigger_action("KISSING"))
+        self.assertEqual(self.app.action_state, "KISSING")
+        kiss_particles = [p for p in self.app.particles if p["type"] == "KISS_HEARTS"]
+        self.assertGreater(len(kiss_particles), 0)
+
+        # 2. DANCING
+        self.assertTrue(self.app.trigger_action("DANCING"))
+        self.assertEqual(self.app.action_state, "DANCING")
+        dance_particles = [p for p in self.app.particles if p["type"] == "MUSIC_NOTES"]
+        self.assertGreater(len(dance_particles), 0)
+
+        # 3. SLEEPING
+        self.assertTrue(self.app.trigger_action("SLEEPING"))
+        self.assertEqual(self.app.action_state, "SLEEPING")
+        sleep_particles = [p for p in self.app.particles if p["type"] == "SLEEP_ZZZ"]
+        self.assertGreater(len(sleep_particles), 0)
+
+        # 4. Buttons references exist
+        self.assertIsNotNone(self.app.btn_kiss)
+        self.assertIsNotNone(self.app.btn_dance)
+        self.assertIsNotNone(self.app.btn_nap)
+        self.assertIn(ActionState.KISSING, self.app.action_buttons)
+        self.assertIn(ActionState.DANCING, self.app.action_buttons)
+        self.assertIn(ActionState.SLEEPING, self.app.action_buttons)
+
+    def test_sunset_beach_and_rooftop_night_rendering(self):
+        """Tests scene switching and element drawing for Sunset Beach and Rooftop Night."""
+        # Sunset Beach
+        self.app.set_scene("Sunset Beach")
+        self.assertEqual(self.app.current_scene, "Sunset Beach")
+        self.assertEqual(self.app.canvas.cget("bg"), SCENES["Sunset Beach"]["bg_color"])
+        self.app.update_and_draw_scene_elements(1.0)
+        beach_items = self.app.canvas.find_withtag("scene_bg")
+        self.assertGreater(len(beach_items), 0)
+
+        # Rooftop Night
+        self.app.set_scene("Rooftop Night")
+        self.assertEqual(self.app.current_scene, "Rooftop Night")
+        self.assertEqual(self.app.canvas.cget("bg"), SCENES["Rooftop Night"]["bg_color"])
+        self.app.update_and_draw_scene_elements(1.0)
+        rooftop_items = self.app.canvas.find_withtag("scene_bg")
+        self.assertGreater(len(rooftop_items), 0)
+
+    def test_keyword_action_triggers(self):
+        """Tests keyword matching for kiss, dance, and nap/sleep."""
+        self.app.handle_user_input("Give me a kiss!")
+        self.assertEqual(self.app.action_state, "KISSING")
+
+        self.app.handle_user_input("Let's dance together!")
+        self.assertEqual(self.app.action_state, "DANCING")
+
+        self.app.handle_user_input("I am so tired, let's take a nap")
+        self.assertEqual(self.app.action_state, "SLEEPING")
 
 
 if __name__ == "__main__":

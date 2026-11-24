@@ -365,10 +365,26 @@ SCENES = {
         "particles": "rain_and_steam",
         "desc": "Warm amber lamp glow, window rain droplets, and steaming tea",
     },
+    "Sunset Beach": {
+        "title": "Sunset Beach 🌅",
+        "theme": "Golden Sunset",
+        "bg_color": "#1f1016",
+        "ground_shadow": "#381c24",
+        "particles": "ocean_waves",
+        "desc": "Golden horizon with gentle rolling ocean waves and tropical sea breeze",
+    },
+    "Rooftop Night": {
+        "title": "Rooftop Night 🌃",
+        "theme": "Midnight Violet",
+        "bg_color": "#0d0f1c",
+        "ground_shadow": "#191c33",
+        "particles": "city_skyline",
+        "desc": "Panoramic rooftop overlooking starry night cityscape with glowing windows",
+    },
 }
 
 DEFAULT_SCENE = "Sakura Park"
-VALID_SCENES = ("Sakura Park", "Midnight Stars", "Cozy Study")
+VALID_SCENES = ("Sakura Park", "Midnight Stars", "Cozy Study", "Sunset Beach", "Rooftop Night")
 
 def get_scene_data(name="Sakura Park"):
     return SCENES.get(name, SCENES[DEFAULT_SCENE])
@@ -508,6 +524,26 @@ FACE_BLUSH = [
     "          HHHHOSssSmmSssSOHHHH          ",
 ]
 
+# Peaceful sleeping closed eyes for nap mode
+FACE_SLEEPING = [
+    "        HhLLhHssssssssssssssHhLLh       ",
+    "        HhLLhHsSEEEsSSSSsEEEsHhLh       ",
+    "   .    HhLLhHssssssssssssssHhLLh  .    ",
+    "        HHhhHObBBBBsSSsBBBBbOHhh        ",
+    "         HHhHOssSSSSSSSSssOHhHH         ",
+    "          HHHHOSssSmmSssSOHHHH          ",
+]
+
+# Blown kiss face with fluttering heart eyes and puckered lips
+FACE_KISS = [
+    "        HhLLhHsSEEESSSSSssssHhLLh       ",
+    "        HhLLhHSWEeESSSSsEEEsHhLLh       ",
+    "   v    HhLLhHSEiEESSSSSssssHhLLh  v    ",
+    "        HHhhHOBBBBBsBBsBBBBBHhhhh       ",
+    "         HHhHOBBBBBsBBsBBBBBHhHH        ",
+    "          HHHHOSsSmmmmSsSOHHHH          ",
+]
+
 # Hand waving arm poses (Overrides rows 14..26, cols 27..40)
 WAVE_ARM_1 = {
     14: (27, "     sSSs  * "),
@@ -578,6 +614,9 @@ class ActionState:
     JUMPING = "JUMPING"
     BLUSHING = "BLUSHING"
     CELEBRATING = "CELEBRATING"
+    SLEEPING = "SLEEPING"
+    KISSING = "KISSING"
+    DANCING = "DANCING"
 
 VALID_ACTIONS = (
     ActionState.IDLE,
@@ -585,6 +624,9 @@ VALID_ACTIONS = (
     ActionState.JUMPING,
     ActionState.BLUSHING,
     ActionState.CELEBRATING,
+    ActionState.SLEEPING,
+    ActionState.KISSING,
+    ActionState.DANCING,
 )
 
 def calculate_jump_physics(progress: float, max_height: float = 42.0):
@@ -701,6 +743,10 @@ def build_frame(face_type="OPEN", sparkle_idx=0, wave_frame=0, jump_legs=False, 
         face_rows = FACE_EXCITED
     elif face_type == "BLUSH":
         face_rows = FACE_BLUSH
+    elif face_type == "SLEEPING":
+        face_rows = FACE_SLEEPING
+    elif face_type == "KISS":
+        face_rows = FACE_KISS
     else:
         face_rows = FACE_OPEN
         
@@ -1153,6 +1199,142 @@ class PixelGirlPopup:
                     "char": random.choice(["~", "∫", "░"]),
                     "color": random.choice(["#a0aec0", "#d6d3d1", "#e2e8f0"]),
                 })
+        elif self.current_scene == "Sunset Beach":
+            for _ in range(16):
+                self.scene_elements.append({
+                    "type": "wave",
+                    "x": random.uniform(0, w),
+                    "y": (h - 38) + random.uniform(-10, 15),
+                    "vx": random.uniform(-1.2, -0.4),
+                    "phase": random.uniform(0, 2 * math.pi),
+                    "char": random.choice(["~", "≈", "≋", "·"]),
+                    "color": random.choice(["#ffb703", "#fb8500", "#ffb4a2", "#ffd166", "#e07a5f"]),
+                })
+            for _ in range(12):
+                self.scene_elements.append({
+                    "type": "sparkle",
+                    "x": random.uniform(10, w - 10),
+                    "y": random.uniform(15, h * 0.55),
+                    "vx": random.uniform(0.3, 0.8),
+                    "vy": random.uniform(-0.4, 0.4),
+                    "size": random.uniform(1.5, 3.5),
+                    "phase": random.uniform(0, 2 * math.pi),
+                    "char": random.choice(["✨", "✦", "🌅", "⭐"]),
+                    "color": random.choice(["#ffd700", "#ffb703", "#f4a261", "#e76f51"]),
+                })
+        elif self.current_scene == "Rooftop Night":
+            for _ in range(25):
+                self.scene_elements.append({
+                    "type": "city_star",
+                    "x": random.uniform(5, w - 5),
+                    "y": random.uniform(5, h * 0.55),
+                    "size": random.uniform(1.0, 2.5),
+                    "twinkle_speed": random.uniform(2.0, 5.0),
+                    "phase": random.uniform(0, 2 * math.pi),
+                    "char": random.choice(["✧", "✦", "•", "⋆", "★"]),
+                    "color": random.choice(["#ffffff", "#c7d2fe", "#93c5fd", "#fef08a"]),
+                })
+            for i in range(14):
+                bx = (i * (w / 14.0)) + random.uniform(2, 6)
+                by = (h - 45) + random.uniform(5, 25)
+                self.scene_elements.append({
+                    "type": "window_light",
+                    "x": bx,
+                    "y": by,
+                    "char": random.choice(["▪", "▫", "■"]),
+                    "twinkle_speed": random.uniform(0.8, 2.2),
+                    "phase": random.uniform(0, 2 * math.pi),
+                    "color": random.choice(["#fef08a", "#fde047", "#67e8f9", "#cbd5e1"]),
+                })
+        elif self.current_scene == "Sunset Beach":
+            for _ in range(16):
+                self.scene_elements.append({
+                    "type": "wave",
+                    "x": random.uniform(0, w),
+                    "y": random.uniform(h * 0.70, h - 8),
+                    "vx": random.uniform(0.8, 2.0),
+                    "phase": random.uniform(0, 2 * math.pi),
+                    "char": random.choice(["🌊", "≋", "·", "≈", "░"]),
+                    "color": random.choice(["#38bdf8", "#0284c7", "#7dd3fc", "#e0f2fe"]),
+                })
+            for _ in range(8):
+                self.scene_elements.append({
+                    "type": "sparkle",
+                    "x": random.uniform(0, w),
+                    "y": random.uniform(h * 0.35, h * 0.68),
+                    "phase": random.uniform(0, 2 * math.pi),
+                    "char": random.choice(["✨", "🌅", "✧", "☼"]),
+                    "color": random.choice(["#fbbf24", "#f59e0b", "#fde68a", "#f43f5e"]),
+                })
+        elif self.current_scene == "Rooftop Night":
+            self.scene_elements = []
+            buildings = [
+                (10, 60, 50), (65, 80, 45), (115, 110, 55),
+                (175, 70, 40), (220, 95, 60), (285, 65, 45), (335, 120, 50),
+            ]
+            for bx, bh, bw in buildings:
+                self.scene_elements.append({
+                    "type": "building",
+                    "x": bx,
+                    "h": bh,
+                    "w": bw,
+                })
+            for _ in range(25):
+                self.scene_elements.append({
+                    "type": "city_star",
+                    "x": random.uniform(8, w - 8),
+                    "y": random.uniform(8, h * 0.55),
+                    "phase": random.uniform(0, 2 * math.pi),
+                    "char": random.choice(["✦", "✧", "⋆", "•"]),
+                    "color": random.choice(["#ffffff", "#e0e7ff", "#93c5fd", "#c7d2fe"]),
+                })
+        elif self.current_scene == "Sunset Beach":
+            for _ in range(16):
+                self.scene_elements.append({
+                    "type": "wave",
+                    "x": random.uniform(0, w),
+                    "y": (h - 38) + random.uniform(-10, 15),
+                    "vx": random.uniform(-1.2, -0.4),
+                    "phase": random.uniform(0, 2 * math.pi),
+                    "char": random.choice(["~", "≈", "≋", "·"]),
+                    "color": random.choice(["#ffb703", "#fb8500", "#ffb4a2", "#ffd166", "#e07a5f"]),
+                })
+            for _ in range(12):
+                self.scene_elements.append({
+                    "type": "sparkle",
+                    "x": random.uniform(10, w - 10),
+                    "y": random.uniform(15, h * 0.55),
+                    "vx": random.uniform(0.3, 0.8),
+                    "vy": random.uniform(-0.4, 0.4),
+                    "size": random.uniform(1.5, 3.5),
+                    "phase": random.uniform(0, 2 * math.pi),
+                    "char": random.choice(["✨", "✦", "🌅", "⭐"]),
+                    "color": random.choice(["#ffd700", "#ffb703", "#f4a261", "#e76f51"]),
+                })
+        elif self.current_scene == "Rooftop Night":
+            for _ in range(25):
+                self.scene_elements.append({
+                    "type": "city_star",
+                    "x": random.uniform(5, w - 5),
+                    "y": random.uniform(5, h * 0.55),
+                    "size": random.uniform(1.0, 2.5),
+                    "twinkle_speed": random.uniform(2.0, 5.0),
+                    "phase": random.uniform(0, 2 * math.pi),
+                    "char": random.choice(["✧", "✦", "•", "⋆", "★"]),
+                    "color": random.choice(["#ffffff", "#c7d2fe", "#93c5fd", "#fef08a"]),
+                })
+            for i in range(14):
+                bx = (i * (w / 14.0)) + random.uniform(2, 6)
+                by = (h - 45) + random.uniform(5, 25)
+                self.scene_elements.append({
+                    "type": "window_light",
+                    "x": bx,
+                    "y": by,
+                    "char": random.choice(["▪", "▫", "■"]),
+                    "twinkle_speed": random.uniform(0.8, 2.2),
+                    "phase": random.uniform(0, 2 * math.pi),
+                    "color": random.choice(["#fef08a", "#fde047", "#67e8f9", "#cbd5e1"]),
+                })
 
         self.scene_particles = self.scene_elements
 
@@ -1291,6 +1473,81 @@ class PixelGirlPopup:
                         font=("DejaVu Sans", 10, "bold"),
                         fill=r["color"], tags=("bg_scene", "scene_bg")
                     )
+
+        elif self.current_scene == "Sunset Beach":
+            sun_x, sun_y = w * 0.5, 45
+            self.canvas.create_oval(
+                sun_x - 30, sun_y - 25, sun_x + 30, sun_y + 25,
+                fill="#ff7b00", outline="#ffb703", width=2, tags=("bg_scene", "scene_bg")
+            )
+            self.canvas.create_text(
+                sun_x, sun_y, text="🌅",
+                font=("DejaVu Sans", 22),
+                fill="#ffd166", tags=("bg_scene", "scene_bg")
+            )
+
+            # Rolling ocean wave lines at bottom
+            for wave_y in (h - 25, h - 14):
+                wave_line = "~ " * (int(w / 12) + 2)
+                self.canvas.create_text(
+                    w / 2.0 + math.sin(t * 3.0 + wave_y) * 8.0, wave_y,
+                    text=wave_line,
+                    font=("DejaVu Sans", 11, "bold"),
+                    fill="#e07a5f", tags=("bg_scene", "scene_bg")
+                )
+
+            for p in self.scene_elements:
+                if p["type"] == "wave":
+                    p["x"] += p["vx"]
+                    p["phase"] += 0.08
+                    if p["x"] < -10:
+                        p["x"] = w + 10
+                    p_y = p["y"] + math.sin(p["phase"]) * 3.0
+                    self.canvas.create_text(
+                        p["x"], p_y, text=p["char"],
+                        font=("DejaVu Sans", 10),
+                        fill=p["color"], tags=("bg_scene", "scene_bg")
+                    )
+                elif p["type"] == "sparkle":
+                    p["x"] += p["vx"]
+                    p["y"] += p["vy"] + math.sin(t * 2.0 + p["phase"]) * 0.4
+                    if p["x"] > w + 10:
+                        p["x"] = -10
+                    self.canvas.create_text(
+                        p["x"], p["y"], text=p["char"],
+                        font=("DejaVu Sans", max(8, int(p["size"] * 2.0))),
+                        fill=p["color"], tags=("bg_scene", "scene_bg")
+                    )
+
+        elif self.current_scene == "Rooftop Night":
+            skyline_y = h - 35
+            self.canvas.create_rectangle(
+                0, skyline_y, w, h,
+                fill="#080711", outline="#1e1833", tags=("bg_scene", "scene_bg")
+            )
+            self.canvas.create_text(
+                w - 35, 30, text="🌃",
+                font=("DejaVu Sans", 20),
+                tags=("bg_scene", "scene_bg")
+            )
+
+            for p in self.scene_elements:
+                if p["type"] == "city_star":
+                    twinkle = (math.sin(t * p["twinkle_speed"] + p["phase"]) + 1.0) / 2.0
+                    if twinkle > 0.15:
+                        self.canvas.create_text(
+                            p["x"], p["y"], text=p["char"],
+                            font=("DejaVu Sans", max(6, int(p["size"] * (0.8 + 0.5 * twinkle) * 2.0))),
+                            fill=p["color"], tags=("bg_scene", "scene_bg")
+                        )
+                elif p["type"] == "window_light":
+                    twinkle = (math.sin(t * p["twinkle_speed"] + p["phase"]) + 1.0) / 2.0
+                    if twinkle > 0.3:
+                        self.canvas.create_text(
+                            p["x"], p["y"], text=p["char"],
+                            font=("DejaVu Sans", 8, "bold"),
+                            fill=p["color"], tags=("bg_scene", "scene_bg")
+                        )
 
         self.canvas.tag_lower("bg_scene")
         self.canvas.tag_lower("scene_bg")
@@ -1655,9 +1912,11 @@ class PixelGirlPopup:
         scene_lbl.pack(side="left", padx=(0, 6))
 
         scene_buttons_data = [
-            ("Sakura Park", "🌸 Sakura Park"),
-            ("Midnight Stars", "🌙 Midnight Stars"),
-            ("Cozy Study", "☕ Cozy Study"),
+            ("Sakura Park", "🌸 Sakura"),
+            ("Midnight Stars", "🌙 Stars"),
+            ("Cozy Study", "☕ Study"),
+            ("Sunset Beach", "🌅 Beach"),
+            ("Rooftop Night", "🌃 Rooftop"),
         ]
 
         for scene_key, btn_text in scene_buttons_data:
@@ -1682,6 +1941,8 @@ class PixelGirlPopup:
         self.btn_scene_sakura = self.scene_buttons.get("Sakura Park")
         self.btn_scene_midnight = self.scene_buttons.get("Midnight Stars")
         self.btn_scene_study = self.scene_buttons.get("Cozy Study")
+        self.btn_scene_beach = self.scene_buttons.get("Sunset Beach")
+        self.btn_scene_rooftop = self.scene_buttons.get("Rooftop Night")
 
         # Study Buddy / Pomodoro Focus Bar
         study_bar = tk.Frame(self.root, bg="#161224", padx=12, pady=2)
@@ -1833,6 +2094,30 @@ class PixelGirlPopup:
         )
         celeb_btn.pack(side="left", padx=2)
 
+        kiss_btn = tk.Button(
+            btn_frame,
+            text="💋 Kiss",
+            command=lambda: (self.trigger_action("KISSING"), self.handle_user_input("Mwah! Sending you a sweet kiss! 💋")),
+            **btn_style
+        )
+        kiss_btn.pack(side="left", padx=2)
+
+        dance_btn = tk.Button(
+            btn_frame,
+            text="💃 Dance",
+            command=lambda: (self.trigger_action("DANCING"), self.handle_user_input("Dance with me! 💃✨")),
+            **btn_style
+        )
+        dance_btn.pack(side="left", padx=2)
+
+        nap_btn = tk.Button(
+            btn_frame,
+            text="💤 Nap",
+            command=lambda: (self.trigger_action("SLEEPING"), self.handle_user_input("Let's take a cozy nap together! 💤")),
+            **btn_style
+        )
+        nap_btn.pack(side="left", padx=2)
+
         status_btn = tk.Button(
             btn_frame,
             text="📊 Friendship",
@@ -1846,22 +2131,17 @@ class PixelGirlPopup:
         self.btn_jump = jump_btn
         self.btn_blush = blush_btn
         self.btn_twirl = celeb_btn
+        self.btn_kiss = kiss_btn
+        self.btn_dance = dance_btn
+        self.btn_nap = nap_btn
         self.action_buttons = {
             ActionState.WAVING: wave_btn,
             ActionState.JUMPING: jump_btn,
             ActionState.BLUSHING: blush_btn,
             ActionState.CELEBRATING: celeb_btn,
-        }
-
-        self.btn_wave = wave_btn
-        self.btn_jump = jump_btn
-        self.btn_blush = blush_btn
-        self.btn_twirl = celeb_btn
-        self.action_buttons = {
-            ActionState.WAVING: wave_btn,
-            ActionState.JUMPING: jump_btn,
-            ActionState.BLUSHING: blush_btn,
-            ActionState.CELEBRATING: celeb_btn,
+            ActionState.KISSING: kiss_btn,
+            ActionState.DANCING: dance_btn,
+            ActionState.SLEEPING: nap_btn,
         }
         
         # Text input row
@@ -2088,12 +2368,15 @@ class PixelGirlPopup:
         - JUMPING: Realistic physics excitement jump with squash/stretch & starburst particles
         - BLUSHING: Flustered rosy cheeks with floating hearts
         - CELEBRATING: Energetic twirling celebration with starbursts and confetti
+        - SLEEPING: Peaceful nap with closed eyes and floating zzZ bubbles
+        - KISSING: Blown kiss with pulsing floating heart projectile
+        - DANCING: Rhythmic dance sway with bouncing music notes ♪ ♫
         - IDLE: Resets to idle state
         """
         if not action_name:
             return False
         action = str(action_name).upper()
-        if action not in ("WAVING", "JUMPING", "BLUSHING", "CELEBRATING", "IDLE"):
+        if action not in ("WAVING", "JUMPING", "BLUSHING", "CELEBRATING", "SLEEPING", "KISSING", "DANCING", "IDLE"):
             return False
 
         self.action_state = action
@@ -2105,6 +2388,9 @@ class PixelGirlPopup:
             "JUMPING": 1.2,
             "BLUSHING": 2.6,
             "CELEBRATING": 2.5,
+            "SLEEPING": 4.0,
+            "KISSING": 2.8,
+            "DANCING": 3.5,
             "IDLE": 0.0,
         }
         self.action_duration = duration if duration is not None else default_durations.get(action, 2.0)
@@ -2123,6 +2409,15 @@ class PixelGirlPopup:
             self.play_chime("BLUSH")
         elif action == "WAVING":
             self.play_chime("GREETING")
+        elif action == "SLEEPING":
+            self.spawn_particles("SLEEP_ZZZ", count=8, origin=(girl_cx + 12, girl_cy - 40))
+            self.play_chime("CLICK")
+        elif action == "KISSING":
+            self.spawn_particles("KISS_HEARTS", count=12, origin=(girl_cx, girl_cy - 20))
+            self.play_chime("BLUSH")
+        elif action == "DANCING":
+            self.spawn_particles("MUSIC_NOTES", count=14, origin=(girl_cx, girl_cy))
+            self.play_chime("CELEBRATE")
 
         return True
 
@@ -2256,6 +2551,51 @@ class PixelGirlPopup:
                     "decay": random.uniform(0.02, 0.035),
                     "type": "CONFETTI",
                 })
+        elif pt in ("SLEEP_ZZZ", "ZZZ", "SLEEP", "NAP"):
+            chars = ["z", "Z", "💤", "zzZ", "•"]
+            colors = ["#a5b4fc", "#c7d2fe", "#e0e7ff", "#f1f5f9", "#93c5fd"]
+            for _ in range(count):
+                self.particles.append({
+                    "x": cx + random.uniform(-10, 20),
+                    "y": cy - random.uniform(10, 30),
+                    "vx": random.uniform(0.3, 1.2),
+                    "vy": random.uniform(-1.8, -0.7),
+                    "char": random.choice(chars),
+                    "color": random.choice(colors),
+                    "life": 1.0,
+                    "decay": random.uniform(0.012, 0.024),
+                    "type": "SLEEP_ZZZ",
+                })
+        elif pt in ("KISS_HEARTS", "KISS", "HEART_PROJECTILE"):
+            chars = ["💋", "💖", "💕", "💘", "✨"]
+            colors = ["#ff0055", "#ff2a85", "#ff70a6", "#ffb6d9", "#ffffff"]
+            for _ in range(count):
+                self.particles.append({
+                    "x": cx + random.uniform(-15, 15),
+                    "y": cy + random.uniform(-10, 10),
+                    "vx": random.uniform(-2.2, 2.2),
+                    "vy": random.uniform(-3.5, -1.2),
+                    "char": random.choice(chars),
+                    "color": random.choice(colors),
+                    "life": 1.0,
+                    "decay": random.uniform(0.015, 0.030),
+                    "type": "KISS_HEARTS",
+                })
+        elif pt in ("MUSIC_NOTES", "MUSIC", "NOTES", "DANCE"):
+            chars = ["♪", "♫", "♬", "♩", "✨", "🌸"]
+            colors = ["#ffd166", "#06d6a0", "#118ab2", "#ef476f", "#ff99c8", "#b388ff"]
+            for _ in range(count):
+                self.particles.append({
+                    "x": cx + random.uniform(-40, 40),
+                    "y": cy + random.uniform(-20, 20),
+                    "vx": random.uniform(-1.5, 1.5),
+                    "vy": random.uniform(-2.8, -1.0),
+                    "char": random.choice(chars),
+                    "color": random.choice(colors),
+                    "life": 1.0,
+                    "decay": random.uniform(0.015, 0.032),
+                    "type": "MUSIC_NOTES",
+                })
         self.action_particles = self.particles
 
     def draw_particles(self, dt: float = 0.033):
@@ -2291,6 +2631,15 @@ class PixelGirlPopup:
             elif p["type"] == "CONFETTI":
                 p["vy"] += 0.22  # gravity
                 p["vx"] *= 0.97
+            elif p["type"] == "SLEEP_ZZZ":
+                p["vx"] += math.sin(t * 2.5 + p["y"]) * 0.08
+                p["vy"] -= 0.04  # gentle drift upward
+            elif p["type"] == "KISS_HEARTS":
+                p["vx"] *= 0.96
+                p["vy"] *= 0.96
+            elif p["type"] == "MUSIC_NOTES":
+                p["vx"] = math.sin(t * 6.0 + p["y"]) * 1.5
+                p["vy"] += 0.06  # gentle bounce
 
             font_size = max(7, int(12 * p["life"]))
             self.canvas.create_text(
@@ -2319,9 +2668,15 @@ class PixelGirlPopup:
             self.trigger_action("JUMPING", duration=1.2)
         elif words & {"wave", "hello", "hi", "hey", "greet", "morning", "evening"}:
             self.trigger_action("WAVING", duration=2.2)
-        elif words & {"love", "cute", "pretty", "beautiful", "blush", "marry", "sweet", "kiss", "heart"}:
+        elif words & {"kiss", "smooch", "mwah"}:
+            self.trigger_action("KISSING", duration=2.5)
+        elif words & {"dance", "party", "spin", "boogie"}:
+            self.trigger_action("DANCING", duration=3.0)
+        elif words & {"sleep", "nap", "tired", "bed", "goodnight", "rest"}:
+            self.trigger_action("SLEEPING", duration=3.5)
+        elif words & {"love", "cute", "pretty", "beautiful", "blush", "marry", "sweet", "heart"}:
             self.trigger_action("BLUSHING", duration=2.6)
-        elif words & {"celebrate", "party", "hurray", "winner", "congrats", "dance"}:
+        elif words & {"celebrate", "hurray", "winner", "congrats"}:
             self.trigger_action("CELEBRATING", duration=2.5)
 
         self.show_thinking()
@@ -2560,6 +2915,33 @@ class PixelGirlPopup:
                         girl_cx = self.canvas_w / 2.0
                         girl_cy = self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0)
                         self.spawn_particles("CONFETTI", count=2, origin=(girl_cx, girl_cy))
+                elif self.action_state == "SLEEPING":
+                    action_face = "SLEEPING"
+                    # Gentle calm breathing motion
+                    self.action_y_shift = math.sin(action_elapsed * 1.8) * 2.0
+                    if int(action_elapsed * 10) % 6 == 0:
+                        girl_cx = self.canvas_w / 2.0
+                        girl_cy = self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0)
+                        self.spawn_particles("SLEEP_ZZZ", count=1, origin=(girl_cx + 20, girl_cy - 40))
+                elif self.action_state == "KISSING":
+                    action_face = "KISS"
+                    # Sweet leaning kiss motion
+                    self.action_y_shift = -abs(math.sin(action_elapsed * 3.5)) * 4.0
+                    if int(action_elapsed * 10) % 4 == 0:
+                        girl_cx = self.canvas_w / 2.0
+                        girl_cy = self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0)
+                        self.spawn_particles("KISS_HEARTS", count=1, origin=(girl_cx + 10, girl_cy - 20))
+                elif self.action_state == "DANCING":
+                    # Energetic rhythmic dancing bounce and hand swaying
+                    dance_step = int(action_elapsed * 6) % 3
+                    arm_pose = [WAVE_ARM_1, WAVE_ARM_2, WAVE_ARM_3][dance_step]
+                    action_face = "EXCITED" if dance_step != 1 else "HAPPY"
+                    self.action_y_shift = -abs(math.sin(action_elapsed * 5.0)) * 8.0
+                    jump_legs = (self.action_y_shift < -4.0)
+                    if int(action_elapsed * 10) % 3 == 0:
+                        girl_cx = self.canvas_w / 2.0
+                        girl_cy = self.girl_y_offset + (self.num_rows * self.pixel_size / 2.0)
+                        self.spawn_particles("MUSIC_NOTES", count=2, origin=(girl_cx, girl_cy - 10))
 
         # 3. Girl face expression state machine
         if action_face:
