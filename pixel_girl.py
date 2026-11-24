@@ -51,6 +51,9 @@ try:
         add_training_sample,
         get_scene_setting,
         set_scene_setting,
+        log_study_session,
+        get_study_sessions,
+        get_study_stats,
     )
 except ImportError:
     try:
@@ -58,11 +61,26 @@ except ImportError:
             add_training_sample,
             get_scene_setting,
             set_scene_setting,
+            log_study_session,
+            get_study_sessions,
+            get_study_stats,
         )
     except Exception:
         add_training_sample = None
         get_scene_setting = None
         set_scene_setting = None
+        log_study_session = None
+        get_study_sessions = None
+        get_study_stats = None
+
+try:
+    from sound_synth import SoundType, play_chime as synth_play_chime
+except ImportError:
+    try:
+        from .sound_synth import SoundType, play_chime as synth_play_chime
+    except Exception:
+        SoundType = None
+        synth_play_chime = None
 
 
 # ---------------------------------------------------------------------------
@@ -325,25 +343,32 @@ def get_theme_palette(name="Princess Pink"):
 SCENES = {
     "Sakura Park": {
         "title": "Sakura Park 🌸",
+        "theme": "Princess Pink",
         "bg_color": "#14111d",
         "ground_shadow": "#251c2e",
+        "particles": "sakura_petals",
         "desc": "Cherry blossoms fluttering softly in spring breeze",
     },
     "Midnight Stars": {
         "title": "Midnight Stars 🌙",
+        "theme": "Midnight Violet",
         "bg_color": "#0a0914",
         "ground_shadow": "#151326",
+        "particles": "celestial_meteors",
         "desc": "Cosmic balcony under a canopy of twinkling stars and shooting meteors",
     },
     "Cozy Study": {
         "title": "Cozy Study ☕",
+        "theme": "Golden Sunset",
         "bg_color": "#181310",
         "ground_shadow": "#2c1f18",
+        "particles": "rain_and_steam",
         "desc": "Warm amber lamp glow, window rain droplets, and steaming tea",
     },
 }
 
 DEFAULT_SCENE = "Sakura Park"
+VALID_SCENES = ("Sakura Park", "Midnight Stars", "Cozy Study")
 
 def get_scene_data(name="Sakura Park"):
     return SCENES.get(name, SCENES[DEFAULT_SCENE])
@@ -891,7 +916,7 @@ def run_terminal_app(initial_greeting=False, theme_name="Princess Pink", enable_
 # ---------------------------------------------------------------------------
 
 class PixelGirlPopup:
-    def __init__(self, pixel_size=10, initial_greeting=False, theme="Princess Pink", enable_sound=True):
+    def __init__(self, pixel_size=10, initial_greeting=False, theme="Princess Pink", enable_sound=True, scene=None):
         import tkinter as tk
         self.tk = tk
         
@@ -946,19 +971,26 @@ class PixelGirlPopup:
         self.thinking_start_time = 0.0
 
         # Scene & Environment State
-        db_p = self.dialogue_engine.db_path if self.dialogue_engine else None
-        if get_scene_setting:
-            try:
-                self.current_scene = get_scene_setting("current_scene", default=DEFAULT_SCENE, db_path=db_p)
-            except Exception:
-                self.current_scene = DEFAULT_SCENE
+        if scene and scene in SCENES:
+            self.current_scene = scene
         else:
-            self.current_scene = DEFAULT_SCENE
+            db_p = self.dialogue_engine.db_path if self.dialogue_engine else None
+            if get_scene_setting:
+                try:
+                    s = get_scene_setting("current_scene", default=DEFAULT_SCENE, db_path=db_p)
+                    self.current_scene = s if s in SCENES else DEFAULT_SCENE
+                except Exception:
+                    self.current_scene = DEFAULT_SCENE
+            else:
+                self.current_scene = DEFAULT_SCENE
 
         self.scene_buttons = {}
         self.scene_elements = []
+        self.scene_particles = self.scene_elements
         self.shooting_star = None
         self.last_shooting_star_time = 0.0
+        self.meteors = []
+        self.meteor_timer = 0.0
 
         # ML Emotion, Intent & Active Learning Feedback State
         self.ml_confidence = 0.85
@@ -973,6 +1005,33 @@ class PixelGirlPopup:
         self.thumb_up_btn = None
         self.thumb_down_btn = None
         self.feedback_label = None
+
+        # Study Buddy / Pomodoro Focus Mode State
+        self.study_duration_minutes = 25
+        self.study_timer_running = False
+        self.study_duration_secs = 25 * 60
+        self.study_remaining_secs = 25 * 60
+        self.study_selected_subject = "General"
+        self.study_last_tick_time = time.time()
+        self.study_streak_days = 0
+        self.study_total_minutes = 0
+        self.study_completed_sessions = 0
+        self.study_subjects = ["General", "Math", "Coding", "Physics", "Reading"]
+        self.study_timer_label = None
+        self.study_streak_label = None
+        self.btn_study_start = None
+        self.btn_study_reset = None
+        self.study_subject_var = None
+
+        db_p = self.dialogue_engine.db_path if self.dialogue_engine else None
+        if get_study_stats:
+            try:
+                s_stats = get_study_stats(db_p)
+                self.study_streak_days = s_stats.get("current_streak_days", 0)
+                self.study_total_minutes = s_stats.get("total_minutes", 0)
+                self.study_completed_sessions = s_stats.get("completed_sessions", 0)
+            except Exception:
+                pass
         
         self.build_ui()
         self.init_grid_cells()
@@ -997,25 +1056,20 @@ class PixelGirlPopup:
                 
         # Force re-render of all cells with new colors
         self.refresh_all_cells()
+        self.play_chime("CLICK")
 
-    def set_scene(self, scene_name: str):
+    def set_scene(self, scene_name: str, persist: bool = True) -> bool:
         """Switches the interactive background scene environment."""
         if scene_name not in SCENES:
-            return
+            return False
         self.current_scene = scene_name
         data = get_scene_data(scene_name)
 
-        # Update canvas bg
+        # Update canvas and root bg
         if hasattr(self, "canvas") and self.canvas:
             self.canvas.config(bg=data["bg_color"])
-
-        # Persist scene preference to DB
-        db_p = self.dialogue_engine.db_path if self.dialogue_engine else None
-        if set_scene_setting:
-            try:
-                set_scene_setting("current_scene", scene_name, db_path=db_p)
-            except Exception:
-                pass
+        if hasattr(self, "root") and self.root:
+            self.root.configure(bg=data["bg_color"])
 
         # Update button highlights
         for name, btn in self.scene_buttons.items():
@@ -1024,19 +1078,35 @@ class PixelGirlPopup:
             else:
                 btn.config(bg="#2c1e38", fg="#c0adc8")
 
+        # Synchronize theme if scene defines an outfit theme
+        target_theme = data.get("theme")
+        if target_theme and target_theme in THEMES:
+            self.set_theme(target_theme)
+
+        # Persist scene preference to DB
+        if persist and set_scene_setting:
+            db_p = self.dialogue_engine.db_path if self.dialogue_engine else None
+            try:
+                set_scene_setting("current_scene", scene_name, db_path=db_p)
+            except Exception:
+                pass
+
         # Re-initialize ambient elements for new scene
         self.init_scene_elements()
-        self.play_chime()
+        self.play_chime("CLICK")
+        return True
 
     def init_scene_elements(self):
         """Initializes ambient elements appropriate for the active scene."""
         self.scene_elements = []
         self.shooting_star = None
+        self.meteors = []
+        self.meteor_timer = 0.0
         w = self.canvas_w
         h = self.canvas_h
 
         if self.current_scene == "Sakura Park":
-            for _ in range(18):
+            for _ in range(22):
                 self.scene_elements.append({
                     "type": "petal",
                     "x": random.uniform(0, w),
@@ -1046,6 +1116,7 @@ class PixelGirlPopup:
                     "size": random.uniform(3.0, 6.0),
                     "phase": random.uniform(0, 2 * math.pi),
                     "rot_speed": random.uniform(1.5, 3.5),
+                    "char": random.choice(["🌸", "❀", "·", "✿"]),
                     "color": random.choice(["#ffb7b2", "#ffccd5", "#ffc6ff", "#ffa6c9", "#ffd1dc"]),
                 })
         elif self.current_scene == "Midnight Stars":
@@ -1069,12 +1140,28 @@ class PixelGirlPopup:
                     "length": random.uniform(8.0, 16.0),
                     "vy": random.uniform(6.0, 11.0),
                     "vx": random.uniform(-1.0, -0.4),
-                    "color": random.choice(["#4a5568", "#718096", "#a0aec0"]),
+                    "char": random.choice(["│", "┆", "💧", "·"]),
+                    "color": random.choice(["#60a5fa", "#93c5fd", "#38bdf8", "#bae6fd"]),
                 })
+            for _ in range(6):
+                self.scene_elements.append({
+                    "type": "steam",
+                    "x": (w - 42) + random.uniform(-6, 6),
+                    "y": (h - 45) - random.uniform(10, 30),
+                    "vy": random.uniform(-1.2, -0.6),
+                    "phase": random.uniform(0, 2 * math.pi),
+                    "char": random.choice(["~", "∫", "░"]),
+                    "color": random.choice(["#a0aec0", "#d6d3d1", "#e2e8f0"]),
+                })
+
+        self.scene_particles = self.scene_elements
+
+    init_scene_particles = init_scene_elements
 
     def update_and_draw_scene_elements(self, t):
         """Updates and renders ambient background elements behind Mia."""
         self.canvas.delete("scene_bg")
+        self.canvas.delete("bg_scene")
         w = self.canvas_w
         h = self.canvas_h
         now = time.time()
@@ -1094,7 +1181,12 @@ class PixelGirlPopup:
                 ry = p["size"] * (0.6 + 0.3 * math.cos(p["phase"]))
                 self.canvas.create_oval(
                     p["x"] - rx, p["y"] - ry, p["x"] + rx, p["y"] + ry,
-                    fill=p["color"], outline="", tags=("scene_bg",)
+                    fill=p["color"], outline="", tags=("bg_scene", "scene_bg")
+                )
+                self.canvas.create_text(
+                    p["x"], p["y"], text=p.get("char", "🌸"),
+                    font=("DejaVu Sans", max(7, int(p["size"] * 1.8))),
+                    fill=p["color"], tags=("bg_scene", "scene_bg")
                 )
 
         elif self.current_scene == "Midnight Stars":
@@ -1102,17 +1194,17 @@ class PixelGirlPopup:
             self.canvas.create_text(
                 moon_x, moon_y, text="🌙",
                 font=("DejaVu Sans", 22),
-                fill="#fef08a", tags=("scene_bg",)
+                fill="#fef08a", tags=("bg_scene", "scene_bg")
             )
 
             for s in self.scene_elements:
                 twinkle = (math.sin(t * s["twinkle_speed"] + s["phase"]) + 1.0) / 2.0
-                if twinkle > 0.25:
-                    font_size = max(6, int(s["size"] * (0.8 + 0.6 * twinkle)))
+                if twinkle > 0.20:
+                    font_size = max(6, int(s["size"] * (0.8 + 0.6 * twinkle) * 2.5))
                     self.canvas.create_text(
                         s["x"], s["y"], text=s["char"],
                         font=("DejaVu Sans", font_size),
-                        fill=s["color"], tags=("scene_bg",)
+                        fill=s["color"], tags=("bg_scene", "scene_bg")
                     )
 
             if self.shooting_star is None:
@@ -1134,12 +1226,12 @@ class PixelGirlPopup:
                 tail_y = m["y"] - m["vy"] * 2.2
                 self.canvas.create_line(
                     tail_x, tail_y, m["x"], m["y"],
-                    fill="#ffffff", width=2, tags=("scene_bg",)
+                    fill="#ffffff", width=2, tags=("bg_scene", "scene_bg")
                 )
                 self.canvas.create_text(
-                    m["x"], m["y"], text="✦",
-                    font=("DejaVu Sans", 8, "bold"),
-                    fill="#ffd700", tags=("scene_bg",)
+                    m["x"], m["y"], text="彡★",
+                    font=("DejaVu Sans", 10, "bold"),
+                    fill="#ffd700", tags=("bg_scene", "scene_bg")
                 )
                 if m["life"] <= 0 or m["x"] > w or m["y"] > h:
                     self.shooting_star = None
@@ -1148,19 +1240,19 @@ class PixelGirlPopup:
             lamp_x, lamp_y = 45, 45
             self.canvas.create_oval(
                 lamp_x - 30, lamp_y - 25, lamp_x + 30, lamp_y + 25,
-                fill="#3a2518", outline="#523420", tags=("scene_bg",)
+                fill="#3a2518", outline="#523420", tags=("bg_scene", "scene_bg")
             )
             self.canvas.create_text(
                 lamp_x, lamp_y, text="💡",
                 font=("DejaVu Sans", 18),
-                fill="#ffd166", tags=("scene_bg",)
+                fill="#ffd166", tags=("bg_scene", "scene_bg")
             )
 
             mug_x, mug_y = w - 42, h - 45
             self.canvas.create_text(
                 mug_x, mug_y, text="☕",
                 font=("DejaVu Sans", 16),
-                tags=("scene_bg",)
+                tags=("bg_scene", "scene_bg")
             )
             for i in range(3):
                 s_phase = t * 3.0 + i * 1.5
@@ -1169,21 +1261,41 @@ class PixelGirlPopup:
                 self.canvas.create_text(
                     sx, sy, text="~",
                     font=("DejaVu Sans", 9, "bold"),
-                    fill="#a0aec0", tags=("scene_bg",)
+                    fill="#a0aec0", tags=("bg_scene", "scene_bg")
                 )
 
             for r in self.scene_elements:
-                r["y"] += r["vy"]
-                r["x"] += r["vx"]
-                if r["y"] > h:
-                    r["y"] = -15
-                    r["x"] = random.uniform(0, w)
-                self.canvas.create_line(
-                    r["x"], r["y"], r["x"] + r["vx"] * 2, r["y"] + r["length"],
-                    fill=r["color"], width=1, tags=("scene_bg",)
-                )
+                if r["type"] == "rain":
+                    r["y"] += r["vy"]
+                    r["x"] += r["vx"]
+                    if r["y"] > h:
+                        r["y"] = -15
+                        r["x"] = random.uniform(0, w)
+                    self.canvas.create_line(
+                        r["x"], r["y"], r["x"] + r["vx"] * 2, r["y"] + r["length"],
+                        fill=r["color"], width=1, tags=("bg_scene", "scene_bg")
+                    )
+                    self.canvas.create_text(
+                        r["x"], r["y"], text=r.get("char", "💧"),
+                        font=("DejaVu Sans", 8),
+                        fill=r["color"], tags=("bg_scene", "scene_bg")
+                    )
+                elif r["type"] == "steam":
+                    r["y"] += r["vy"]
+                    r["x"] += math.sin(t * 3.0 + r["phase"]) * 0.5
+                    if r["y"] < h - 70:
+                        r["y"] = h - 45
+                        r["x"] = (w - 42) + random.uniform(-6, 6)
+                    self.canvas.create_text(
+                        r["x"], r["y"], text=r.get("char", "~"),
+                        font=("DejaVu Sans", 10, "bold"),
+                        fill=r["color"], tags=("bg_scene", "scene_bg")
+                    )
 
+        self.canvas.tag_lower("bg_scene")
         self.canvas.tag_lower("scene_bg")
+
+    update_scene_effects = update_and_draw_scene_elements
 
     def toggle_sound(self):
         """Toggles audio chime / bell option."""
@@ -1195,17 +1307,167 @@ class PixelGirlPopup:
             else:
                 self.sound_btn.config(text="🔕 Chime: OFF", fg="#8c7d9a", bg="#1e1828")
 
-    def play_chime(self):
-        """Emits an audio chime/bell when sound is enabled."""
+    def play_chime(self, sound_type="GREETING"):
+        """Emits an expressive procedural 8-bit retro sound effect when sound is enabled."""
         if not self.sound_enabled:
             return
-        try:
-            self.root.bell()
-        except Exception:
+        played = False
+        if synth_play_chime is not None:
             try:
-                print("\a", end="", flush=True)
+                st = sound_type
+                if isinstance(sound_type, str) and SoundType is not None:
+                    upper_key = sound_type.upper()
+                    if hasattr(SoundType, upper_key):
+                        st = getattr(SoundType, upper_key)
+                played = synth_play_chime(st)
+            except Exception:
+                played = False
+        if not played:
+            try:
+                self.root.bell()
+            except Exception:
+                try:
+                    print("\a", end="", flush=True)
+                except Exception:
+                    pass
+
+    def update_study_timer_display(self):
+        """Updates the focus timer display label with MM:SS."""
+        mins = self.study_remaining_secs // 60
+        secs = self.study_remaining_secs % 60
+        timer_str = f"⏱ {mins:02d}:{secs:02d}"
+        if hasattr(self, "study_timer_label") and self.study_timer_label:
+            color = "#ffd166" if self.study_timer_running else "#06d6a0"
+            self.study_timer_label.config(text=timer_str, fg=color)
+
+    def toggle_study_timer(self):
+        """Toggles between starting and pausing the focus timer."""
+        if self.study_timer_running:
+            self.pause_study_timer()
+        else:
+            self.start_study_timer()
+
+    def start_study_timer(self, duration_minutes=None, subject=None):
+        """Starts or resumes the focus timer countdown."""
+        if duration_minutes is not None:
+            self.study_duration_minutes = duration_minutes
+            self.study_duration_secs = int(duration_minutes * 60)
+            self.study_remaining_secs = self.study_duration_secs
+        elif self.study_remaining_secs <= 0:
+            self.study_remaining_secs = self.study_duration_secs
+
+        if subject:
+            self.set_study_subject(subject)
+
+        self.study_timer_running = True
+        self.study_last_tick_time = time.time()
+        if hasattr(self, "btn_study_start") and self.btn_study_start:
+            self.btn_study_start.config(text="⏸ Pause", fg="#ffd166", bg="#3a2518")
+        self.update_study_timer_display()
+        self.play_chime("CLICK")
+
+        sub = self.study_selected_subject
+        self.trigger_speech(f"Let's focus together on {sub}! You can do this! 💖📚", emotion="HAPPY")
+
+    def pause_study_timer(self):
+        """Pauses the focus timer countdown."""
+        self.study_timer_running = False
+        if hasattr(self, "btn_study_start") and self.btn_study_start:
+            self.btn_study_start.config(text="▶ Resume", fg="#06d6a0", bg="#2c1e38")
+        self.update_study_timer_display()
+        self.play_chime("CLICK")
+
+    def reset_study_timer(self, duration_minutes=None):
+        """Resets the focus timer back to full duration."""
+        self.study_timer_running = False
+        if duration_minutes is not None:
+            self.study_duration_minutes = duration_minutes
+            self.study_duration_secs = int(duration_minutes * 60)
+        self.study_remaining_secs = self.study_duration_secs
+        if hasattr(self, "btn_study_start") and self.btn_study_start:
+            self.btn_study_start.config(text="▶ Start", fg="#06d6a0", bg="#2c1e38")
+        self.update_study_timer_display()
+        self.play_chime("CLICK")
+
+    def set_study_subject(self, subject: str):
+        """Sets the selected study subject and updates selector."""
+        self.study_selected_subject = str(subject)
+        if hasattr(self, "study_subject_var") and self.study_subject_var:
+            self.study_subject_var.set(self.study_selected_subject)
+
+    def tick_study_timer(self):
+        """Maintains active timer countdown, calling completion on zero."""
+        if not self.study_timer_running:
+            return
+        now = time.time()
+        elapsed = now - self.study_last_tick_time
+        if elapsed >= 1.0:
+            secs_passed = int(elapsed)
+            self.study_last_tick_time += secs_passed
+            self.study_remaining_secs = max(0, self.study_remaining_secs - secs_passed)
+            self.update_study_timer_display()
+            if self.study_remaining_secs <= 0:
+                self.complete_study_session()
+
+    def complete_study_session(self):
+        """Triggered upon successful completion of a focus session."""
+        self.study_timer_running = False
+        if hasattr(self, "btn_study_start") and self.btn_study_start:
+            self.btn_study_start.config(text="▶ Start", fg="#06d6a0", bg="#2c1e38")
+        self.update_study_timer_display()
+
+        duration_mins = max(1, self.study_duration_secs // 60)
+        db_p = self.dialogue_engine.db_path if self.dialogue_engine else None
+
+        if log_study_session is not None:
+            try:
+                log_study_session(
+                    subject=self.study_selected_subject,
+                    duration_minutes=duration_mins,
+                    completed=True,
+                    db_path=db_p,
+                )
             except Exception:
                 pass
+
+        # Trigger celebratory action and particles
+        self.trigger_action("CELEBRATING")
+        self.spawn_particles("CONFETTI", count=25)
+
+        # Play study bell and victory fanfare sound
+        self.play_chime("STUDY_BELL")
+        if hasattr(self, "root") and self.root:
+            self.root.after(700, lambda: self.play_chime("CELEBRATE"))
+
+        # Refresh stats and update badge
+        self.refresh_study_stats()
+
+        # Update friendship display
+        if hasattr(self, "dialogue_engine") and self.dialogue_engine:
+            self.friendship_level = self.dialogue_engine.get_friendship_level()
+            self.update_friendship_display()
+
+        congrats_msg = (
+            f"🎉 Amazing focus! You finished {duration_mins}m of {self.study_selected_subject}! "
+            f"I'm so proud of you! (+5 friendship) 💖🎓"
+        )
+        self.trigger_speech(congrats_msg, emotion="HAPPY")
+
+    def refresh_study_stats(self):
+        """Queries database for updated study streak and total minutes."""
+        db_p = self.dialogue_engine.db_path if self.dialogue_engine else None
+        if get_study_stats is not None:
+            try:
+                stats = get_study_stats(db_p)
+                self.study_streak_days = stats.get("current_streak_days", 0)
+                self.study_total_minutes = stats.get("total_minutes", 0)
+                self.study_completed_sessions = stats.get("completed_sessions", 0)
+            except Exception:
+                pass
+        if hasattr(self, "study_streak_label") and self.study_streak_label:
+            self.study_streak_label.config(
+                text=f"🔥 {self.study_streak_days}d streak • {self.study_total_minutes}m"
+            )
 
     def update_friendship_display(self, level=None):
         """Updates the friendship level indicator and badge."""
@@ -1416,6 +1678,89 @@ class PixelGirlPopup:
             )
             btn.pack(side="left", padx=3)
             self.scene_buttons[scene_key] = btn
+
+        self.btn_scene_sakura = self.scene_buttons.get("Sakura Park")
+        self.btn_scene_midnight = self.scene_buttons.get("Midnight Stars")
+        self.btn_scene_study = self.scene_buttons.get("Cozy Study")
+
+        # Study Buddy / Pomodoro Focus Bar
+        study_bar = tk.Frame(self.root, bg="#161224", padx=12, pady=2)
+        study_bar.pack(fill="x", padx=16, pady=(0, 2))
+
+        study_lbl = tk.Label(
+            study_bar,
+            text="📚 Focus:",
+            font=("DejaVu Sans", 8, "bold"),
+            fg="#ffd166",
+            bg="#161224"
+        )
+        study_lbl.pack(side="left", padx=(0, 4))
+
+        mins = self.study_remaining_secs // 60
+        secs = self.study_remaining_secs % 60
+        self.study_timer_label = tk.Label(
+            study_bar,
+            text=f"⏱ {mins:02d}:{secs:02d}",
+            font=("DejaVu Sans", 8, "bold"),
+            fg="#06d6a0",
+            bg="#161224"
+        )
+        self.study_timer_label.pack(side="left", padx=4)
+
+        self.study_subject_var = tk.StringVar(value=self.study_selected_subject)
+        self.study_subject_menu = tk.OptionMenu(
+            study_bar,
+            self.study_subject_var,
+            *self.study_subjects,
+            command=self.set_study_subject
+        )
+        self.study_subject_menu.config(
+            bg="#2c1e38", fg="#c0adc8", activebackground="#ff69b4",
+            activeforeground="#ffffff", font=("DejaVu Sans", 7, "bold"),
+            relief="flat", highlightthickness=0, bd=0
+        )
+        self.study_subject_menu.pack(side="left", padx=3)
+
+        self.btn_study_start = tk.Button(
+            study_bar,
+            text="▶ Start",
+            command=self.toggle_study_timer,
+            font=("DejaVu Sans", 7, "bold"),
+            bg="#2c1e38",
+            fg="#06d6a0",
+            activebackground="#06d6a0",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=5,
+            pady=1,
+            cursor="hand2"
+        )
+        self.btn_study_start.pack(side="left", padx=2)
+
+        self.btn_study_reset = tk.Button(
+            study_bar,
+            text="⏹ Reset",
+            command=self.reset_study_timer,
+            font=("DejaVu Sans", 7, "bold"),
+            bg="#2c1e38",
+            fg="#ff70a6",
+            activebackground="#ef476f",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=5,
+            pady=1,
+            cursor="hand2"
+        )
+        self.btn_study_reset.pack(side="left", padx=2)
+
+        self.study_streak_label = tk.Label(
+            study_bar,
+            text=f"🔥 {self.study_streak_days}d streak • {self.study_total_minutes}m",
+            font=("DejaVu Sans", 7, "bold"),
+            fg="#f77f00",
+            bg="#161224"
+        )
+        self.study_streak_label.pack(side="right")
         
         # Pixel Art Canvas
         canvas_bg = get_scene_data(self.current_scene)["bg_color"]
@@ -1769,14 +2114,15 @@ class PixelGirlPopup:
 
         if action == "JUMPING":
             self.spawn_particles("STARBURST", count=14, origin=(girl_cx, girl_cy))
-            self.play_chime()
+            self.play_chime("JUMP")
         elif action == "CELEBRATING":
             self.spawn_particles("CONFETTI", count=16, origin=(girl_cx, girl_cy))
-            self.play_chime()
+            self.play_chime("CELEBRATE")
         elif action == "BLUSHING":
             self.spawn_particles("HEARTS", count=10, origin=(girl_cx, girl_cy - 20))
+            self.play_chime("BLUSH")
         elif action == "WAVING":
-            self.play_chime()
+            self.play_chime("GREETING")
 
         return True
 
@@ -1992,7 +2338,8 @@ class PixelGirlPopup:
                 self.update_friendship_display(friendship)
                 self.update_ml_display(intent, int_conf, emotion, emo_conf)
                 self.trigger_speech(reply, emotion=emotion)
-                self.play_chime()
+                suggested_sound = res.get("suggested_sound", "GREETING")
+                self.play_chime(suggested_sound)
             else:
                 if "hello" in lower or "hi" in lower:
                     reply = "HELLO! ♥"
@@ -2008,7 +2355,8 @@ class PixelGirlPopup:
                     emotion = "HAPPY"
                 self.update_ml_display(intent, 0.85, emotion, 0.85)
                 self.trigger_speech(reply, emotion=emotion)
-                self.play_chime()
+                sound = "BLUSH" if emotion == "LOVE" else ("GREETING" if intent == "GREETING" else "CLICK")
+                self.play_chime(sound)
         finally:
             self.hide_thinking()
 
@@ -2140,6 +2488,9 @@ class PixelGirlPopup:
         self.frame_count += 1
         now = time.time()
         t = now - self.start_time
+
+        # 0. Study timer countdown tick
+        self.tick_study_timer()
         
         # 1. Speech cloud state machine & scale interpolation
         if self.speech_active:
@@ -2327,11 +2678,23 @@ Usage:
         run_terminal_app(initial_greeting=initial_say, theme_name=theme_name, enable_sound=sound_enabled)
         return
 
+    scene_name = None
+    if "--scene" in args:
+        s_idx = args.index("--scene")
+        if s_idx + 1 < len(args):
+            raw_s = args[s_idx + 1].lower()
+            if "star" in raw_s or "midnight" in raw_s:
+                scene_name = "Midnight Stars"
+            elif "study" in raw_s or "cozy" in raw_s or "rain" in raw_s:
+                scene_name = "Cozy Study"
+            elif "sakura" in raw_s or "park" in raw_s:
+                scene_name = "Sakura Park"
+
     # Check for GUI display
     has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
     if has_display:
         try:
-            app = PixelGirlPopup(pixel_size=10, initial_greeting=initial_say, theme=theme_name, enable_sound=sound_enabled)
+            app = PixelGirlPopup(pixel_size=10, initial_greeting=initial_say, theme=theme_name, enable_sound=sound_enabled, scene=scene_name)
             app.run()
             return
         except Exception as e:
