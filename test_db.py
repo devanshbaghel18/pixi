@@ -8,9 +8,12 @@ and model run performance metrics.
 
 import os
 import sqlite3
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from companion_db import (
     DEFAULT_DB_PATH,
