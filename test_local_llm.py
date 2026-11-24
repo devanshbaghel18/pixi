@@ -36,6 +36,7 @@ from local_llm import (
     LocalLLM,
     build_girlfriend_system_prompt,
     extract_and_save_facts,
+    get_affection_tier_info,
     get_local_llm,
     get_memory_facts_dict,
 )
@@ -232,6 +233,59 @@ class TestDialogueEngineWithLocalLLM(unittest.TestCase):
         self.assertTrue(event.wait(timeout=2.0))
         self.assertEqual(len(res_holder), 1)
         self.assertEqual(res_holder[0]["emotion"], Emotion.LOVE.value)
+
+
+class TestAffectionTiersAndMilestones(unittest.TestCase):
+    """Tests affection tier mapping, dynamic prompt injection, and milestone unlocks."""
+
+    def setUp(self):
+        self.temp_fd, self.temp_path = tempfile.mkstemp(suffix=".db")
+        os.close(self.temp_fd)
+        conn = init_db(self.temp_path)
+        conn.close()
+
+    def tearDown(self):
+        clear_db(self.temp_path)
+        if os.path.exists(self.temp_path):
+            try:
+                os.remove(self.temp_path)
+            except OSError:
+                pass
+
+    def test_affection_tier_resolution(self):
+        tier0 = get_affection_tier_info(0)
+        self.assertEqual(tier0["tier_name"], "Acquaintance")
+        self.assertEqual(tier0["pet_name"], "friend")
+
+        tier15 = get_affection_tier_info(15)
+        self.assertEqual(tier15["tier_name"], "Close Confidante")
+        self.assertEqual(tier15["pet_name"], "darling")
+
+        tier30 = get_affection_tier_info(30)
+        self.assertEqual(tier30["tier_name"], "Sweetheart Girlfriend")
+        self.assertEqual(tier30["pet_name"], "sweetheart")
+
+        tier60 = get_affection_tier_info(60)
+        self.assertEqual(tier60["tier_name"], "Eternal Soulmate")
+        self.assertEqual(tier60["pet_name"], "my love")
+
+    def test_prompt_includes_affection_and_milestones(self):
+        from companion_db import set_state
+        set_state("friendship_level", "30", db_path=self.temp_path)
+
+        prompt = build_girlfriend_system_prompt(db_path=self.temp_path)
+        self.assertIn("Sweetheart Girlfriend", prompt)
+        self.assertIn("sweetheart", prompt)
+
+    def test_dialogue_engine_returns_affection_fields(self):
+        engine = DialogueEngine(db_path=self.temp_path, use_llm=True, mock_llm=True)
+        res = engine.process_message("Good morning Mia! Let's study!", record_checkin=True)
+
+        self.assertIn("pet_name", res)
+        self.assertIn("affection_tier", res)
+        self.assertIn("new_milestones", res)
+        self.assertIn("checkin_info", res)
+        self.assertIsNotNone(res["checkin_info"])
 
 
 if __name__ == "__main__":
