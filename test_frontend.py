@@ -409,7 +409,7 @@ class TestActionSystemAndAnimationOverhaul(unittest.TestCase):
         except Exception:
             self.skipTest("Tkinter display not available")
 
-        app = PixelGirlPopup(pixel_size=4, initial_greeting=False, enable_sound=False)
+        app = PixelGirlPopup(pixel_size=4, initial_greeting=False, enable_sound=False, scene="Sakura Park")
         app.root.withdraw()
         try:
             # 1. Test WAVING action
@@ -465,7 +465,7 @@ class TestActionSystemAndAnimationOverhaul(unittest.TestCase):
         except Exception:
             self.skipTest("Tkinter display not available")
 
-        app = PixelGirlPopup(pixel_size=4, initial_greeting=False, enable_sound=False)
+        app = PixelGirlPopup(pixel_size=4, initial_greeting=False, enable_sound=False, scene="Sakura Park")
         app.root.withdraw()
         try:
             # 1. Quick action button attributes and dictionary
@@ -535,7 +535,7 @@ class TestInteractiveScenesAndEnvironments(unittest.TestCase):
         except Exception:
             self.skipTest("Tkinter display not available")
 
-        app = PixelGirlPopup(pixel_size=4, initial_greeting=False, enable_sound=False)
+        app = PixelGirlPopup(pixel_size=4, initial_greeting=False, enable_sound=False, scene="Sakura Park")
         app.root.withdraw()
         try:
             # Initial scene should be Sakura Park
@@ -570,6 +570,157 @@ class TestInteractiveScenesAndEnvironments(unittest.TestCase):
         finally:
             if app and app.root:
                 app.root.destroy()
+
+
+class TestStudyBuddyAndPomodoroTimer(unittest.TestCase):
+    """Tests the Study Buddy focus timer state machine, streak calculations, and completion celebration."""
+
+    def setUp(self):
+        import tkinter as tk
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            root.destroy()
+        except Exception:
+            self.skipTest("Tkinter display not available")
+
+        self.app = PixelGirlPopup(pixel_size=4, initial_greeting=False, enable_sound=False)
+        self.app.root.withdraw()
+
+    def tearDown(self):
+        if self.app and self.app.root:
+            self.app.root.destroy()
+
+    def test_study_timer_initial_state(self):
+        """Verifies initial Study Buddy widget attributes and timer state."""
+        self.assertEqual(self.app.study_duration_minutes, 25)
+        self.assertEqual(self.app.study_remaining_secs, 25 * 60)
+        self.assertFalse(self.app.study_timer_running)
+        self.assertEqual(self.app.study_selected_subject, "General")
+        self.assertIn("General", self.app.study_subjects)
+        self.assertIn("Math", self.app.study_subjects)
+        self.assertIsNotNone(self.app.study_timer_label)
+        self.assertIsNotNone(self.app.btn_study_start)
+        self.assertIsNotNone(self.app.btn_study_reset)
+        self.assertIsNotNone(self.app.study_streak_label)
+
+    def test_study_timer_start_pause_resume_reset(self):
+        """Tests start, pause, resume, and reset cycles of the focus timer."""
+        # 1. Start timer
+        self.app.start_study_timer(duration_minutes=25, subject="Coding")
+        self.assertTrue(self.app.study_timer_running)
+        self.assertEqual(self.app.study_selected_subject, "Coding")
+        self.assertEqual(self.app.btn_study_start.cget("text"), "⏸ Pause")
+
+        # 2. Pause timer
+        self.app.pause_study_timer()
+        self.assertFalse(self.app.study_timer_running)
+        self.assertEqual(self.app.btn_study_start.cget("text"), "▶ Resume")
+
+        # 3. Toggle resumes
+        self.app.toggle_study_timer()
+        self.assertTrue(self.app.study_timer_running)
+        self.assertEqual(self.app.btn_study_start.cget("text"), "⏸ Pause")
+
+        # 4. Reset timer
+        self.app.reset_study_timer(duration_minutes=30)
+        self.assertFalse(self.app.study_timer_running)
+        self.assertEqual(self.app.study_duration_secs, 30 * 60)
+        self.assertEqual(self.app.study_remaining_secs, 30 * 60)
+        self.assertEqual(self.app.btn_study_start.cget("text"), "▶ Start")
+
+    def test_study_subject_selection(self):
+        """Tests changing subject modifies study_selected_subject and widget text."""
+        self.app.set_study_subject("Physics")
+        self.assertEqual(self.app.study_selected_subject, "Physics")
+        self.assertEqual(self.app.study_subject_var.get(), "Physics")
+
+    def test_study_timer_tick_and_countdown(self):
+        """Verifies tick_study_timer decrements remaining seconds and updates display."""
+        self.app.start_study_timer(duration_minutes=10, subject="Math")
+        self.app.study_remaining_secs = 600
+        # Simulate 3 seconds elapsed
+        self.app.study_last_tick_time = self.app.study_last_tick_time - 3.5
+        self.app.tick_study_timer()
+        self.assertLessEqual(self.app.study_remaining_secs, 597)
+        self.assertIn("09:", self.app.study_timer_label.cget("text"))
+
+    def test_study_session_completion(self):
+        """Verifies session completion triggers celebration action, particles, and speech message."""
+        self.app.study_selected_subject = "AI Research"
+        self.app.study_duration_secs = 1500
+        self.app.study_remaining_secs = 0
+        self.app.complete_study_session()
+
+        # Should transition to CELEBRATING action state
+        self.assertEqual(self.app.action_state, "CELEBRATING")
+        self.assertGreater(len(self.app.action_particles), 0)
+        # Should display congratulatory speech cloud
+        self.assertTrue(self.app.speech_active)
+        self.assertIn("AI Research", self.app.speech_text)
+        self.assertIn("Amazing focus", self.app.speech_text)
+
+
+class TestProceduralSoundSynthesizerWiring(unittest.TestCase):
+    """Tests the integration of procedural 8-bit sound effects into frontend components."""
+
+    def setUp(self):
+        import tkinter as tk
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            root.destroy()
+        except Exception:
+            self.skipTest("Tkinter display not available")
+
+        self.app = PixelGirlPopup(pixel_size=4, initial_greeting=False, enable_sound=True)
+        self.app.root.withdraw()
+
+    def tearDown(self):
+        if self.app and self.app.root:
+            self.app.root.destroy()
+
+    def test_play_chime_all_sound_types(self):
+        """Verifies play_chime handles all procedural SoundTypes without throwing."""
+        sound_names = ["GREETING", "JUMP", "BLUSH", "CELEBRATE", "STUDY_BELL", "CLICK"]
+        for s_name in sound_names:
+            with self.subTest(sound=s_name):
+                # Should execute cleanly whether audio daemon is active or mocked
+                self.app.play_chime(s_name)
+
+    def test_actions_trigger_corresponding_sounds(self):
+        """Tests that physical action animations call play_chime with specific sound signatures."""
+        recorded_sounds = []
+        original_play_chime = self.app.play_chime
+
+        def mock_play(sound_type="GREETING"):
+            recorded_sounds.append(sound_type)
+            return original_play_chime(sound_type)
+
+        self.app.play_chime = mock_play
+
+        self.app.trigger_action("JUMPING")
+        self.assertIn("JUMP", recorded_sounds)
+
+        self.app.trigger_action("WAVING")
+        self.assertIn("GREETING", recorded_sounds)
+
+        self.app.trigger_action("BLUSHING")
+        self.assertIn("BLUSH", recorded_sounds)
+
+        self.app.trigger_action("CELEBRATING")
+        self.assertIn("CELEBRATE", recorded_sounds)
+
+    def test_scene_and_theme_trigger_click_sounds(self):
+        """Tests that UI theme and scene selections trigger crisp click sound effects."""
+        recorded_sounds = []
+        self.app.play_chime = lambda s="CLICK": recorded_sounds.append(s)
+
+        self.app.set_scene("Midnight Stars")
+        self.assertIn("CLICK", recorded_sounds)
+
+        self.app.set_theme("Midnight Violet")
+        self.assertIn("CLICK", recorded_sounds)
 
 
 if __name__ == "__main__":
